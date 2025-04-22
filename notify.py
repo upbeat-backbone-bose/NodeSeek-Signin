@@ -33,7 +33,7 @@ def print(text, *args, **kw):
 # 通知服务
 # fmt: off
 push_config = {
-    'HITOKOTO': False,                  # 启用一言（随机句子）
+    'HITOKOTO': True,                  # 启用一言（随机句子）
 
     'BARK_PUSH': '',                    # bark IP 或设备码，例：https://api.day.app/DxHcxxxxxRxxxxxxcm/
     'BARK_ARCHIVE': '',                 # bark 推送是否存档
@@ -866,7 +866,7 @@ def one() -> str:
     获取一条一言。
     :return:
     """
-    url = "https://v1.hitokoto.cn/"
+    url = "https://international.v1.hitokoto.cn/"
     res = requests.get(url).json()
     return res["hitokoto"] + "    ----" + res["from"]
 
