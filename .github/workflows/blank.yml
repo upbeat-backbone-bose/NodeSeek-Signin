@@ -1,4 +1,4 @@
-name: nodeseek鸡腿签到
+name: Nodeseek Automatic Check-in
 
 on:
   push:
