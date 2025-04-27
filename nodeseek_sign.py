@@ -9,7 +9,7 @@ from yescaptcha import YesCaptchaSolver, YesCaptchaSolverError
 # 配置参数
 API_BASE_URL = os.environ.get("API_BASE_URL", "")
 CLIENTT_KEY = os.environ.get("CLIENTT_KEY", "")
-NS_RANDOM = os.environ.get("NS_RANDOM", "true")
+NS_RANDOM = os.environ.get("NS_RANDOM", "false")
 NS_COOKIE = os.environ.get("NS_COOKIE", "")
 USER = os.environ.get("USER", "")
 PASS = os.environ.get("PASS", "")
