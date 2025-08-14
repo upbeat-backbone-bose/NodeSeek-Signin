@@ -391,7 +391,7 @@ if __name__ == "__main__":
     solver_type = os.getenv("SOLVER_TYPE", "turnstile")
     api_base_url = os.getenv("API_BASE_URL", "")
     client_key = os.getenv("CLIENTT_KEY", "") 
-    ns_random = os.getenv("NS_RANDOM", "true")
+    ns_random = os.getenv("NS_RANDOM", "false")
 
     env_type = detect_environment()
     print(f"当前运行环境: {env_type}")
@@ -533,3 +533,4 @@ if __name__ == "__main__":
             print("所有Cookie已成功保存")
         except Exception as e:
             print(f"保存Cookie变量异常: {e}")
+
