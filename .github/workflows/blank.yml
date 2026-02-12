@@ -50,7 +50,7 @@ jobs:
           
           # Cookie配置
           NS_COOKIE: ${{ vars.NS_COOKIE || secrets.NS_COOKIE }}
-          
+          NS_RANDOM: ${{ secrets.NS_RANDOM }}
           # 验证码配置
           SOLVER_TYPE: ${{ secrets.SOLVER_TYPE }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
@@ -60,6 +60,9 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           
+          # 指纹配置
+          NS_IMPERSONATE: ${{ secrets.NS_IMPERSONATE || 'chrome110' }}
+
           # 通知推送配置
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_USER_ID: ${{ secrets.TG_USER_ID }}
