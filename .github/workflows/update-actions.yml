@@ -1,0 +1,138 @@
+name: Update GitHub Actions
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # 每周一 09:00 (UTC+8)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  outdated-actions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+
+      - name: 列出过时的 actions
+        id: outdated
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            const workflowsDir = '.github/workflows';
+            const outdatedActions = [];
+            
+            // 读取所有 workflow 文件
+            const workflowFiles = fs.readdirSync(workflowsDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
+            
+            for (const workflowFile of workflowFiles) {
+              const workflowPath = path.join(workflowsDir, workflowFile);
+              const content = fs.readFileSync(workflowPath, 'utf8');
+              
+              // 匹配 uses: actions/ 开头的行
+              const actionRegex = /uses:\s+actions\/([^@]+)@([^\s]+)/g;
+              let match;
+              
+              while ((match = actionRegex.exec(content)) !== null) {
+                const action = match[1];
+                const currentVersion = match[2];
+                outdatedActions.push({
+                  workflow: workflowFile,
+                  action: action,
+                  currentVersion: currentVersion
+                });
+              }
+            }
+            
+            // 输出结果供后续步骤使用
+            console.log('JSON_OUTPUT:' + JSON.stringify(outdatedActions));
+            
+      - name: 检查并更新过时的 actions
+        if: steps.outdated.outputs.result != ''
+        uses: actions/github-script@v7
+        env:
+          OUTDATED_ACTIONS: ${{ steps.outdated.outputs.result }}
+        with:
+          script: |
+            const outdatedActions = JSON.parse(process.env.OUTDATED_ACTIONS);
+            
+            if (outdatedActions.length === 0) {
+              console.log('所有 GitHub Actions 都已是最新版本');
+              return;
+            }
+            
+            const results = [];
+            
+            for (const item of outdatedActions) {
+              // 获取最新的 release 版本
+              const response = await github.rest.repos.getLatestRelease({
+                owner: 'actions',
+                repo: item.action
+              });
+              
+              const latestVersion = response.data.tag_name.replace(/^v/, '');
+              
+              if (item.currentVersion !== latestVersion) {
+                results.push({
+                  action: item.action,
+                  current: item.currentVersion,
+                  latest: latestVersion,
+                  workflow: item.workflow
+                });
+              }
+            }
+            
+            if (results.length === 0) {
+              console.log('所有 GitHub Actions 都已是最新版本');
+              return;
+            }
+            
+            // 生成更新报告
+            let report = '## GitHub Actions 更新报告\n\n';
+            report += '检测到以下 actions 有可用更新：\n\n';
+            report += '| Action | 当前版本 | 最新版本 | 所属 Workflow |\n';
+            report += '|--------|----------|----------|-------------|\n';
+            
+            for (const r of results) {
+              report += `| ${r.action} | ${r.current} | ${r.latest} | ${r.workflow} |\n`;
+            }
+            
+            // 检查是否已有相同内容的 open PR
+            const existingPR = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              title: 'ci: 更新 GitHub Actions 版本'
+            });
+            
+            if (existingPR.data.length > 0) {
+              console.log('已存在 open 的更新 PR，将更新其内容');
+              const prNumber = existingPR.data[0].number;
+              
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                body: report
+              });
+            } else {
+              // 创建新 PR
+              await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'ci: 更新 GitHub Actions 版本',
+                head: 'dependabot/github-actions',
+                base: 'main',
+                body: report + '\n\n请检查上述更新并在确认后合并。'
+              });
+            }
+            
+            console.log('更新报告已生成');
