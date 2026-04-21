@@ -11,9 +11,6 @@ permissions:
 jobs:
   outdated-actions:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: 检出仓库
         uses: actions/checkout@v6
@@ -22,27 +19,22 @@ jobs:
         id: find
         run: |
           echo "Checking for outdated GitHub Actions..."
-          
-          # 使用 grep 查找所有 workflow 文件中的 actions 版本（排除自身）
+
           echo "outdated=$(grep -E "^[[:space:]]*uses: actions/" .github/workflows/*.yml | grep -v "update-actions.yml" | sed 's/.*: *uses: actions\/\([^@]*\)@\(.*\)/{"action":"\1","version":"\2"}/' | jq -c -s '.' 2>/dev/null || echo '[]')" >> $GITHUB_OUTPUT
 
-      - name: 输出检测结果
-        run: |
-          echo "检测到的 actions:"
-          echo '${{ steps.find.outputs.outdated }}' | jq '.'
-
-      - name: 检查并更新过时的 actions
+      - name: 检测并生成报告
         if: steps.find.outputs.outdated != '[]' && steps.find.outputs.outdated != ''
         uses: actions/github-script@v9
         with:
+          result-encoding: string
           script: |
             const outdatedStr = `${{ steps.find.outputs.outdated }}`;
-            
+
             if (!outdatedStr || outdatedStr === '[]') {
               console.log('所有 GitHub Actions 都已是最新版本');
               return;
             }
-            
+
             let outdatedActions;
             try {
               outdatedActions = JSON.parse(outdatedStr);
@@ -50,23 +42,23 @@ jobs:
               console.log('解析 actions 列表失败:', e.message);
               return;
             }
-            
+
             if (!Array.isArray(outdatedActions) || outdatedActions.length === 0) {
               console.log('所有 GitHub Actions 都已是最新版本');
               return;
             }
-            
+
             const results = [];
-            
+
             for (const item of outdatedActions) {
               try {
                 const response = await github.rest.repos.getLatestRelease({
                   owner: 'actions',
                   repo: item.action
                 });
-                
+
                 const latestVersion = response.data.tag_name.replace(/^v/, '');
-                
+
                 if (item.version !== latestVersion) {
                   results.push({
                     action: item.action,
@@ -78,48 +70,38 @@ jobs:
                 console.log(`获取 ${item.action} 最新版本失败:`, e.message);
               }
             }
-            
+
             if (results.length === 0) {
               console.log('所有 GitHub Actions 都已是最新版本');
               return;
             }
-            
-            console.log(`发现 ${results.length} 个需要更新的 actions`);
-            
-            // 生成 PR 报告
+
+            // 生成 Markdown 报告
             let report = '## GitHub Actions 更新报告\n\n';
             report += '检测到以下 actions 有可用更新：\n\n';
             report += '| Action | 当前版本 | 最新版本 |\n';
             report += '|--------|----------|----------|\n';
-            
+
             for (const r of results) {
               report += `| ${r.action} | ${r.current} | ${r.latest} |\n`;
             }
-            
-            report += '\n\n请手动更新以下文件中的版本号：\n\n';
+
+            report += '\n---\n\n';
+            report += '### 更新步骤\n\n';
+            report += '1. 手动更新 `.github/workflows/` 目录下的 workflow 文件中的版本号\n';
+            report += '2. 提交更改\n\n';
             report += '```bash\n';
             for (const r of results) {
-              report += `# 更新 ${r.action}\n`;
-              report += `sed -i 's/actions\\/${r.action}@${r.current}/actions\\/${r.action}@${r.latest}/g' .github/workflows/*.yml\n`;
+              report += `# 更新 ${r.action}\nsed -i 's/actions\\/${r.action}@${r.current}/actions\\/${r.action}@${r.latest}/g' .github/workflows/*.yml\n`;
             }
+            report += '# 提交\ngit add .github/workflows/*.yml\ngit commit -m "ci: 更新 GitHub Actions 版本"\ngit push\n';
             report += '```\n';
-            
-            report += '\n\n或使用 `gh` 命令：\n';
-            report += '```bash\n';
-            report += `# 手动编辑文件后提交\n`;
-            report += `git add .github/workflows/*.yml && git commit -m "ci: 更新 GitHub Actions 版本"\n`;
-            report += '```\n';
-            
-            // 创建 PR
-            const branchName = `github-actions/update-${Date.now()}`;
-            
-            await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: 'ci: 更新 GitHub Actions 版本',
-              head: branchName,
-              base: 'main',
-              body: report
-            });
-            
-            console.log(`已创建 PR: ci: 更新 GitHub Actions 版本`);
+
+            // 写入 workflow summary
+            const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+            if (summaryPath) {
+              const fs = require('fs');
+              fs.writeFileSync(summaryPath, report);
+            }
+
+            console.log(`检测到 ${results.length} 个需要更新的 actions，已生成更新报告`);
