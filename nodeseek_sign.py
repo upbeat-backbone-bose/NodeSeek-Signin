@@ -2,11 +2,23 @@
 
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from curl_cffi import requests
 from yescaptcha import YesCaptchaSolver, YesCaptchaSolverError
 from turnstile_solver import TurnstileSolver, TurnstileSolverError
+
+
+_print = print
+_debug_mutex = threading.Lock()
+
+
+def _debug_print(*args, **kwargs):
+    """调试模式下打印详细调试信息。"""
+    if DEBUG_MODE:
+        with _debug_mutex:
+            _print("[DEBUG]", *args, **kwargs)
 
 def _get_env_str(name: str, default: str = "") -> str:
     """读取环境变量并去掉空白；若为空字符串则回退 default。"""
@@ -26,6 +38,24 @@ def _get_env_int(name: str, default: int) -> int:
         return int(str(v).strip())
     except (ValueError, TypeError):
         return default
+
+
+def _mask_string(s: str, show_start: int = 2, show_end: int = 2) -> str:
+    """对字符串进行脱敏处理，仅显示首尾字符。"""
+    if not s or len(s) <= show_start + show_end:
+        return "*" * len(s) if s else ""
+    return s[:show_start] + "*" * (len(s) - show_start - show_end) + s[-show_end:]
+
+
+def _get_env_bool(name: str, default: bool = False) -> bool:
+    """读取环境变量作为布尔值；支持 true/false/1/0。"""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.lower() in ("true", "1", "yes")
+
+
+DEBUG_MODE = _get_env_bool("DEBUG", False)
 
 
 def _get_impersonate_candidates() -> list[str]:
@@ -48,6 +78,9 @@ def _get_impersonate_candidates() -> list[str]:
     "chrome131",
     "chrome133a",
     "chrome136",
+    "chrome142",
+    "chrome145",
+    "chrome146",
 
     # Chrome (Android)
     "chrome99_android",
@@ -60,17 +93,29 @@ def _get_impersonate_candidates() -> list[str]:
     # Safari
     "safari153",
     "safari155",
+    "safari15_3",
+    "safari15_5",
     "safari170",
     "safari172_ios",
+    "safari17_0",
+    "safari17_2_ios",
     "safari180",
     "safari180_ios",
     "safari184",
     "safari184_ios",
+    "safari18_0",
+    "safari18_0_ios",
     "safari260",
+    "safari2601",
     "safari260_ios",
 
-    # Firefox / Tor
+    # Firefox
     "firefox133",
+    "firefox135",
+    "firefox144",
+    "firefox147",
+
+    # Tor
     "tor145",
     ]
 
@@ -81,7 +126,7 @@ def _get_impersonate_candidates() -> list[str]:
     return candidates
 
 
-IMPERSONATE_VERSION = _get_env_str("NS_IMPERSONATE", "chrome110")
+IMPERSONATE_VERSION = _get_env_str("NS_IMPERSONATE", "chrome146")
 IMPERSONATE_CANDIDATES = _get_impersonate_candidates()
 REQUEST_TIMEOUT = _get_env_int("TIMEOUT", 15)
 
@@ -182,10 +227,12 @@ def delete_ql_env(var_name: str):
             print(f"未找到环境变量: {var_name}")
             return True
     except (TurnstileSolverError, YesCaptchaSolverError) as e:
-        print(f"验证码解析错误: {e}")
+        _debug_print(f"验证码解析错误: {e}")
+        print(f"验证码解析错误")
         return None
     except Exception as e:
-        print(f"删除环境变量异常: {str(e)}")
+        _debug_print(f"删除环境变量异常: {str(e)}")
+        print(f"删除环境变量异常")
         return False
 
 # ---------------- 青龙面板变量更新函数 ----------------
@@ -213,10 +260,12 @@ def save_cookie_to_ql(var_name: str, cookie: str):
             print(f"青龙面板环境变量 {var_name} 创建成功")
             return True
         else:
-            print(f"青龙面板环境变量创建失败: {create_result}")
+            _debug_print(f"青龙面板环境变量创建失败: {create_result}")
+            print(f"青龙面板环境变量创建失败")
             return False
     except Exception as e:
-        print(f"青龙面板环境变量操作异常: {str(e)}")
+        _debug_print(f"青龙面板环境变量操作异常: {str(e)}")
+        print(f"青龙面板环境变量操作异常")
         return False
 
 # ---------------- Docker Cookie 文件保存 ----------------
@@ -225,14 +274,14 @@ COOKIE_FILE_PATH = "./cookie/NS_COOKIE.txt"
 def save_cookie_to_file(cookie_str: str):
     """将Cookie保存到文件"""
     try:
-        # 确保目录存在
         os.makedirs(os.path.dirname(COOKIE_FILE_PATH), exist_ok=True)
         with open(COOKIE_FILE_PATH, "w") as f:
             f.write(cookie_str)
         print(f"Cookie 已成功保存到文件: {COOKIE_FILE_PATH}")
         return True
     except Exception as e:
-        print(f"保存Cookie到文件失败: {e}")
+        _debug_print(f"保存Cookie到文件失败: {str(e)}")
+        print(f"保存Cookie到文件失败")
         return False
 
 # ---------------- 统一变量保存函数 ----------------
@@ -278,7 +327,8 @@ def session_login(user, password, solver_type, api_base_url, client_key):
             print("验证码解析失败")
             return None
     except Exception as e:
-        print(f"验证码错误: {e}")
+        _debug_print(f"验证码错误: {e}")
+        print(f"验证码错误")
         return None
 
     # 优先使用环境变量指定的 IMPERSONATE_VERSION（若未设置则使用默认值），作为首次尝试的指纹
@@ -314,10 +364,12 @@ def session_login(user, password, solver_type, api_base_url, client_key):
             cookie_string = '; '.join([f"{k}={v}" for k, v in cookies.items()])
             return cookie_string
         else:
-            print("登录失败:", resp_json.get("message"))
+            _debug_print(f"登录失败: {resp_json.get('message')}")
+            print("登录失败: 认证失败")
             return None
     except Exception as e:
-        print("登录异常:", e)
+        _debug_print(f"登录异常: {e}")
+        print("登录异常: 请求出错")
         return None
 
 # ---------------- 签到逻辑 ----------------
@@ -347,7 +399,8 @@ def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, 
             return resp, ver, None
         except Exception as e:
             last_err = e
-            print(f"[WARN] 请求异常 (impersonate={ver}): {e}")
+            _debug_print(f"[WARN] 请求异常 (impersonate={ver}): {e}")
+            print(f"[WARN] 请求异常 (impersonate={ver})")
             continue
     # 所有候选都试过后返回最后一次响应或错误，并把最后尝试的指纹返回给调用方
     return last_resp, (ordered_candidates[-1] if ordered_candidates else IMPERSONATE_VERSION), last_err
@@ -387,6 +440,7 @@ def sign(ns_cookie, ns_random):
             return "invalid", msg
         return "fail", msg
     except Exception as e:
+        _debug_print(f"签到请求异常: {e}")
         return "error", str(e)
 
 # ---------------- 查询签到收益统计函数 ----------------
@@ -502,6 +556,7 @@ def get_signin_stats(ns_cookie, days=30):
         return stats, "查询成功"
         
     except Exception as e:
+        _debug_print(f"查询签到统计异常: {e}")
         return None, f"查询异常: {str(e)}"
 
 # ---------------- 显示签到统计信息 ----------------
@@ -554,7 +609,7 @@ if __name__ == "__main__":
                     all_cookies = f.read().strip()
                 print("成功从文件加载Cookie。")
             except Exception as e:
-                print(f"从文件读取Cookie失败: {e}")
+                print(f"从文件读取Cookie失败")
         else:
             print("Cookie文件不存在，将使用空Cookie。")
     else:
@@ -587,8 +642,9 @@ if __name__ == "__main__":
         cookie = cookie_list[i] if i < len(cookie_list) else ""
         
         display_user = user if user else f"账号{account_index}"
+        masked_user = _mask_string(display_user, 2, 1) if user else display_user
         
-        print(f"\n==== 账号 {display_user} 开始签到 ====")
+        print(f"\n==== 账号 {masked_user} 开始签到 ====")
         
         if cookie:
             result, msg = sign(cookie, ns_random)
@@ -596,25 +652,28 @@ if __name__ == "__main__":
             result, msg = "invalid", "无Cookie"
 
         if result in ["success", "already"]:
-            print(f"账号 {display_user} 签到成功: {msg}")
+            _debug_print(f"签到结果: {msg}")
+            print(f"账号 {masked_user} 签到成功")
             
             print("正在查询签到收益统计...")
             stats, stats_msg = get_signin_stats(cookie, 30)
             if stats:
-                print_signin_stats(stats, display_user)
+                print_signin_stats(stats, masked_user)
             else:
-                print(f"统计查询失败: {stats_msg}")
+                _debug_print(f"统计查询失败: {stats_msg}")
+                print(f"统计查询失败")
             
             if hadsend:
                 try:
-                    notification_msg = f"账号 {display_user} 签到成功：{msg}"
+                    notification_msg = f"账号 {masked_user} 签到成功"
                     if stats:
                         notification_msg += f"\n{stats['period']}已签到{stats['days_count']}天，共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
                     send("NodeSeek 签到", notification_msg)
-                except Exception as e:
-                    print(f"发送通知失败: {e}")
+                except Exception:
+                    print(f"发送通知失败")
         else:
-            print(f"签到失败或Cookie无效: {msg}")
+            _debug_print(f"签到失败或Cookie无效: {msg}")
+            print(f"签到失败或Cookie无效")
             
             if user and password:
                 print("尝试重新登录获取新Cookie...")
@@ -623,37 +682,40 @@ if __name__ == "__main__":
                     print("登录成功，使用新Cookie重新签到...")
                     result, msg = sign(new_cookie, ns_random)
                     if result in ["success", "already"]:
-                        print(f"账号 {display_user} 签到成功: {msg}")
+                        _debug_print(f"签到结果: {msg}")
+                        print(f"账号 {masked_user} 签到成功")
                         cookies_updated = True
                         
                         print("正在查询签到收益统计...")
                         stats, stats_msg = get_signin_stats(new_cookie, 30)
                         if stats:
-                            print_signin_stats(stats, display_user)
+                            print_signin_stats(stats, masked_user)
                         else:
-                            print(f"统计查询失败: {stats_msg}")
+                            _debug_print(f"统计查询失败: {stats_msg}")
+                            print(f"统计查询失败")
                         
                         cookie_list[i] = new_cookie
                         
                         if hadsend:
                             try:
-                                notification_msg = f"账号 {display_user} 签到成功：{msg}"
+                                notification_msg = f"账号 {masked_user} 签到成功"
                                 if stats:
                                     notification_msg += f"\n{stats['period']}已签到{stats['days_count']}天，共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
                                 send("NodeSeek 签到", notification_msg)
-                            except Exception as e:
-                                print(f"发送通知失败: {e}")
+                            except Exception:
+                                print(f"发送通知失败")
                     else:
-                        print(f"账号 {display_user} 重新签到仍然失败: {msg}")
+                        _debug_print(f"重新签到失败: {msg}")
+                        print(f"账号 {masked_user} 重新签到仍然失败")
                 else:
-                    print(f"账号 {display_user} 登录失败，无法获取新Cookie")
+                    print(f"账号 {masked_user} 登录失败，无法获取新Cookie")
                     if hadsend:
                         try:
-                            send("NodeSeek 登录失败", f"账号 {display_user} 登录失败")
-                        except Exception as e:
-                            print(f"发送通知失败: {e}")
+                            send("NodeSeek 登录失败", f"账号 {masked_user} 登录失败")
+                        except Exception:
+                            print(f"发送通知失败")
             else:
-                print(f"账号 {display_user} 无法重新登录: 未配置用户名或密码")
+                print(f"账号 {masked_user} 无法重新登录: 未配置用户名或密码")
     
     if cookies_updated and cookie_list:
         print("\n==== 处理完毕，保存更新后的Cookie ====")
@@ -662,5 +724,5 @@ if __name__ == "__main__":
             save_cookie("NS_COOKIE", all_cookies_new)
             print("所有Cookie已成功保存")
         except Exception as e:
-            print(f"保存Cookie变量异常: {e}")
+            print(f"保存Cookie变量异常")
 
