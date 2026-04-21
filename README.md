@@ -42,6 +42,7 @@
 | Docker Compose / 本地服务器 | [`docs/deployment/docker-compose.md`](docs/deployment/docker-compose.md) | 支持 `RUN_AT` 定时和 `IN_DOCKER` 持久化 Cookie |
 | 青龙面板 | [`docs/deployment/qinglong-panel.md`](docs/deployment/qinglong-panel.md) | 与青龙定时任务深度集成，沿用面板通知 |
 | Cloudflare Worker | [`docs/deployment/cloudflare-worker.md`](docs/deployment/cloudflare-worker.md) | 适合无服务器场景，可配合第三方验证码服务 |
+| Docker 镜像构建发布 | [`docs/deployment/docker.md`](docs/deployment/docker.md) | 发布 Release 时自动构建并推送到 Docker Hub |
 
 > 🎯 以上文档包含详细步骤、示例命令及截图，README 仅保留概览。
 
