@@ -35,6 +35,23 @@ def _mask_string(s: str, show_start: int = 2, show_end: int = 2) -> str:
     return s[:show_start] + "*" * (len(s) - show_start - show_end) + s[-show_end:]
 
 
+def _get_env_bool(name: str, default: bool = False) -> bool:
+    """读取环境变量作为布尔值；支持 true/false/1/0。"""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.lower() in ("true", "1", "yes")
+
+
+DEBUG_MODE = _get_env_bool("DEBUG", False)
+
+
+def _debug_print(*args, **kwargs):
+    """调试模式下打印详细调试信息。"""
+    if DEBUG_MODE:
+        print(*args, **kwargs)
+
+
 def _get_impersonate_candidates() -> list[str]:
     """生成 curl_cffi impersonate 版本候选列表。
     """
@@ -189,9 +206,11 @@ def delete_ql_env(var_name: str):
             print(f"未找到环境变量: {var_name}")
             return True
     except (TurnstileSolverError, YesCaptchaSolverError) as e:
+        _debug_print(f"验证码解析错误: {e}")
         print(f"验证码解析错误")
         return None
     except Exception as e:
+        _debug_print(f"删除环境变量异常: {str(e)}")
         print(f"删除环境变量异常")
         return False
 
@@ -220,9 +239,11 @@ def save_cookie_to_ql(var_name: str, cookie: str):
             print(f"青龙面板环境变量 {var_name} 创建成功")
             return True
         else:
+            _debug_print(f"青龙面板环境变量创建失败: {create_result}")
             print(f"青龙面板环境变量创建失败")
             return False
     except Exception as e:
+        _debug_print(f"青龙面板环境变量操作异常: {str(e)}")
         print(f"青龙面板环境变量操作异常")
         return False
 
@@ -232,13 +253,13 @@ COOKIE_FILE_PATH = "./cookie/NS_COOKIE.txt"
 def save_cookie_to_file(cookie_str: str):
     """将Cookie保存到文件"""
     try:
-        # 确保目录存在
         os.makedirs(os.path.dirname(COOKIE_FILE_PATH), exist_ok=True)
         with open(COOKIE_FILE_PATH, "w") as f:
             f.write(cookie_str)
         print(f"Cookie 已成功保存到文件: {COOKIE_FILE_PATH}")
         return True
     except Exception as e:
+        _debug_print(f"保存Cookie到文件失败: {str(e)}")
         print(f"保存Cookie到文件失败")
         return False
 
@@ -285,7 +306,8 @@ def session_login(user, password, solver_type, api_base_url, client_key):
             print("验证码解析失败")
             return None
     except Exception as e:
-        print(f"验证码错误: {type(e).__name__}")
+        _debug_print(f"验证码错误: {e}")
+        print(f"验证码错误")
         return None
 
     # 优先使用环境变量指定的 IMPERSONATE_VERSION（若未设置则使用默认值），作为首次尝试的指纹
@@ -321,9 +343,11 @@ def session_login(user, password, solver_type, api_base_url, client_key):
             cookie_string = '; '.join([f"{k}={v}" for k, v in cookies.items()])
             return cookie_string
         else:
+            _debug_print(f"登录失败: {resp_json.get('message')}")
             print("登录失败: 认证失败")
             return None
     except Exception as e:
+        _debug_print(f"登录异常: {e}")
         print("登录异常: 请求出错")
         return None
 
@@ -354,6 +378,7 @@ def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, 
             return resp, ver, None
         except Exception as e:
             last_err = e
+            _debug_print(f"[WARN] 请求异常 (impersonate={ver}): {e}")
             print(f"[WARN] 请求异常 (impersonate={ver})")
             continue
     # 所有候选都试过后返回最后一次响应或错误，并把最后尝试的指纹返回给调用方
@@ -394,6 +419,7 @@ def sign(ns_cookie, ns_random):
             return "invalid", msg
         return "fail", msg
     except Exception as e:
+        _debug_print(f"签到请求异常: {e}")
         return "error", str(e)
 
 # ---------------- 查询签到收益统计函数 ----------------
@@ -509,6 +535,7 @@ def get_signin_stats(ns_cookie, days=30):
         return stats, "查询成功"
         
     except Exception as e:
+        _debug_print(f"查询签到统计异常: {e}")
         return None, f"查询异常: {str(e)}"
 
 # ---------------- 显示签到统计信息 ----------------
@@ -604,6 +631,7 @@ if __name__ == "__main__":
             result, msg = "invalid", "无Cookie"
 
         if result in ["success", "already"]:
+            _debug_print(f"签到结果: {msg}")
             print(f"账号 {masked_user} 签到成功")
             
             print("正在查询签到收益统计...")
@@ -611,6 +639,7 @@ if __name__ == "__main__":
             if stats:
                 print_signin_stats(stats, masked_user)
             else:
+                _debug_print(f"统计查询失败: {stats_msg}")
                 print(f"统计查询失败")
             
             if hadsend:
@@ -622,6 +651,7 @@ if __name__ == "__main__":
                 except Exception:
                     print(f"发送通知失败")
         else:
+            _debug_print(f"签到失败或Cookie无效: {msg}")
             print(f"签到失败或Cookie无效")
             
             if user and password:
@@ -631,6 +661,7 @@ if __name__ == "__main__":
                     print("登录成功，使用新Cookie重新签到...")
                     result, msg = sign(new_cookie, ns_random)
                     if result in ["success", "already"]:
+                        _debug_print(f"签到结果: {msg}")
                         print(f"账号 {masked_user} 签到成功")
                         cookies_updated = True
                         
@@ -639,6 +670,7 @@ if __name__ == "__main__":
                         if stats:
                             print_signin_stats(stats, masked_user)
                         else:
+                            _debug_print(f"统计查询失败: {stats_msg}")
                             print(f"统计查询失败")
                         
                         cookie_list[i] = new_cookie
@@ -652,6 +684,7 @@ if __name__ == "__main__":
                             except Exception:
                                 print(f"发送通知失败")
                     else:
+                        _debug_print(f"重新签到失败: {msg}")
                         print(f"账号 {masked_user} 重新签到仍然失败")
                 else:
                     print(f"账号 {masked_user} 登录失败，无法获取新Cookie")

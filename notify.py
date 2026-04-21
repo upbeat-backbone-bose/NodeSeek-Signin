@@ -28,7 +28,23 @@ def _get_env_int(name: str, default: int) -> int:
         return default
 
 
+def _get_env_bool(name: str, default: bool = False) -> bool:
+    """读取环境变量作为布尔值；支持 true/false/1/0。"""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.lower() in ("true", "1", "yes")
+
+
 REQUEST_TIMEOUT = _get_env_int("TIMEOUT", 15)
+DEBUG_MODE = _get_env_bool("DEBUG", False)
+
+
+def _debug_print(*args, **kwargs):
+    """调试模式下打印详细调试信息。"""
+    if DEBUG_MODE:
+        with mutex:
+            _print("[DEBUG]", *args, **kwargs)
 
 
 # 原先的 print 函数和主线程的锁
@@ -449,7 +465,8 @@ def qmsg_bot(title: str, content: str) -> None:
     if response["code"] == 0:
         print("qmsg 推送成功！")
     else:
-        print(f'qmsg 推送失败！{response["reason"]}')
+        _debug_print(f'qmsg 推送失败: {response["reason"]}')
+        print('qmsg 推送失败！')
 
 
 def wecom_app(title: str, content: str) -> None:
@@ -708,7 +725,8 @@ def smtp(title: str, content: str) -> None:
         smtp_server.close()
         print("SMTP 邮件 推送成功！")
     except Exception as e:
-        print(f"SMTP 邮件 推送失败！{e}")
+        _debug_print(f"SMTP 邮件 推送失败: {e}")
+        print("SMTP 邮件 推送失败！")
 
 
 def pushme(title: str, content: str) -> None:
