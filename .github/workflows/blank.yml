@@ -1,9 +1,6 @@
 name: nodeseek Automatic Check-in
 
 on:
-  push:
-    branches:
-      - main
   schedule:
     - cron: '59 23 * * *'  # 北京时间 00:00 (UTC+8)，对应UTC时间 16:00
   workflow_dispatch:
