@@ -3,13 +3,11 @@
 <div align="center">
   
 ![NodeSeek](https://img.shields.io/badge/NodeSeek-自动签到-green)
-![GitHub stars](https://img.shields.io/github/stars/yowiv/NodeSeek-Signin?style=flat)
+![GitHub stars](https://img.shields.io/github/stars/upbeat-backbone-bose/NodeSeek-Signin?style=flat)
 ![Python](https://img.shields.io/badge/Language-Python-blue)
-![License](https://img.shields.io/github/license/yowiv/NodeSeek-Signin)
+![License](https://img.shields.io/github/license/upbeat-backbone-bose/NodeSeek-Signin)
 
 </div>
-
-[Deepflood论坛签到](https://github.com/yowiv/deepflood-Signin)
 
 
 ## 📝 项目介绍

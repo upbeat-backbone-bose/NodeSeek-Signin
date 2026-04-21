@@ -185,7 +185,7 @@ class TurnstileSolver:
 if __name__ == "__main__":
     # 示例用法
     api_base_url = "http://127.0.0.1:3000"
-    client_key = "yowiv"
+    client_key = "<YOUR_CLIENT_KEY>"
     
     solver = TurnstileSolver(
         api_base_url=api_base_url,
