@@ -1,5 +1,5 @@
 # 使用轻量级的 Python 基础镜像
-FROM python:3.9-alpine
+FROM python:3.12-alpine
 
 # 设置时区为 GMT+8
 RUN apk add --no-cache tzdata ca-certificates
