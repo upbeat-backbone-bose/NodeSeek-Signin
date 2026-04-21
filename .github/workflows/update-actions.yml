@@ -105,6 +105,23 @@ jobs:
               }
             }
             
+            // 创建新分支并推送更新
+            const { execSync } = require('child_process');
+            const branchName = `github-actions/update-${Date.now()}`;
+            
+            try {
+              execSync(`git checkout -b ${branchName}`, { cwd: process.cwd() });
+              execSync(`git add .github/workflows/blank.yml`, { cwd: process.cwd() });
+              execSync(`git config user.name "github-actions[bot]"`, { cwd: process.cwd() });
+              execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`, { cwd: process.cwd() });
+              execSync(`git commit -m "ci: 更新 GitHub Actions 版本"`, { cwd: process.cwd() });
+              execSync(`git push -u origin ${branchName}`, { cwd: process.cwd() });
+              console.log(`已推送分支: ${branchName}`);
+            } catch (e) {
+              console.log('推送分支失败:', e.message);
+              return;
+            }
+            
             // 生成 PR
             let report = '## GitHub Actions 更新报告\n\n';
             report += '检测到以下 actions 有可用更新：\n\n';
@@ -115,31 +132,13 @@ jobs:
               report += `| ${r.action} | ${r.current} | ${r.latest} |\n`;
             }
             
-            // 检查是否已有 open PR
-            const existingPRs = await github.rest.pulls.list({
+            // 创建 PR
+            console.log('创建新的更新 PR');
+            await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              state: 'open'
+              title: 'ci: 更新 GitHub Actions 版本',
+              head: branchName,
+              base: 'main',
+              body: report + '\n\n请检查上述更新并在确认后合并。'
             });
-            
-            const existingPR = existingPRs.data.find(pr => pr.title === 'ci: 更新 GitHub Actions 版本');
-            
-            if (existingPR) {
-              console.log(`已存在 PR #${existingPR.number}，将更新其内容`);
-              await github.rest.pulls.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: existingPR.number,
-                body: report + '\n\n请检查上述更新并在确认后合并。'
-              });
-            } else {
-              console.log('创建新的更新 PR');
-              await github.rest.pulls.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: 'ci: 更新 GitHub Actions 版本',
-                head: 'github-actions/update',
-                base: 'main',
-                body: report + '\n\n请检查上述更新并在确认后合并。'
-              });
-            }
