@@ -3,6 +3,17 @@ import time
 import os
 from typing import Dict, Optional, Any, Union
 
+
+def _get_env_int(name: str, default: int) -> int:
+    """读取环境变量作为整数；若为空或无效则回退 default。"""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    try:
+        return int(str(v).strip())
+    except (ValueError, TypeError):
+        return default
+
 class YesCaptchaSolverError(Exception):
     """YesCaptcha 解决器错误基类"""
     pass
@@ -21,7 +32,7 @@ class YesCaptchaSolver:
         client_key: str = "",
         max_retries: int = 20,
         retry_interval: int = 3,
-        timeout: int = 60,
+        timeout: int = None,
         advanced: bool = False
     ):
         """
@@ -41,7 +52,7 @@ class YesCaptchaSolver:
         self.client_key = client_key
         self.max_retries = max_retries
         self.retry_interval = retry_interval
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else _get_env_int("TIMEOUT", 15)
         self.advanced = advanced
     
     def solve(

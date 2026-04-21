@@ -17,6 +17,17 @@ def _get_env_str(name: str, default: str = "") -> str:
     return v if v else default
 
 
+def _get_env_int(name: str, default: int) -> int:
+    """读取环境变量作为整数；若为空或无效则回退 default。"""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    try:
+        return int(str(v).strip())
+    except (ValueError, TypeError):
+        return default
+
+
 def _get_impersonate_candidates() -> list[str]:
     """生成 curl_cffi impersonate 版本候选列表。
     """
@@ -72,6 +83,7 @@ def _get_impersonate_candidates() -> list[str]:
 
 IMPERSONATE_VERSION = _get_env_str("NS_IMPERSONATE", "chrome110")
 IMPERSONATE_CANDIDATES = _get_impersonate_candidates()
+REQUEST_TIMEOUT = _get_env_int("TIMEOUT", 15)
 
 # ---------------- 通知模块动态加载 ----------------
 hadsend = False
@@ -127,13 +139,13 @@ def save_cookie_to_github_var(var_name: str, cookie: str):
 
     data = {"name": var_name, "value": cookie}
 
-    response = py_requests.patch(url_check, headers=headers, json=data)
+    response = py_requests.patch(url_check, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
     if response.status_code == 204:
         print(f"GitHub: {var_name} 更新成功")
         return True
     elif response.status_code == 404:
         print(f"GitHub: {var_name} 不存在，尝试创建...")
-        response = py_requests.post(url_create, headers=headers, json=data)
+        response = py_requests.post(url_create, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
         if response.status_code == 201:
             print(f"GitHub: {var_name} 创建成功")
             return True
@@ -295,7 +307,7 @@ def session_login(user, password, solver_type, api_base_url, client_key):
         'Content-Type': "application/json"
     }
     try:
-        response = session.post("https://www.nodeseek.com/api/account/signIn", json=data, headers=headers)
+        response = session.post("https://www.nodeseek.com/api/account/signIn", json=data, headers=headers, timeout=REQUEST_TIMEOUT)
         resp_json = response.json()
         if resp_json.get("success"):
             cookies = session.cookies.get_dict()
@@ -316,7 +328,7 @@ def _is_cloudflare_challenge(text: str) -> bool:
     # 常见挑战页特征
     return ("just a moment" in t) or ("cf-chl" in t) or ("challenge" in t and "cloudflare" in t)
 
-def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, json_data=None, timeout: int = 25):
+def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, json_data=None, timeout: int = REQUEST_TIMEOUT):
     last_resp = None
     last_err = None
     # 优先尝试 IMPERSONATE_VERSION，然后尝试 IMPERSONATE_CANDIDATES（去重）
