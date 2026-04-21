@@ -25,7 +25,7 @@ on:
 
 env:
   REGISTRY: ${{ vars.DOCKERHUB_REGISTRY || 'docker.io' }}
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}/nodeseek-signin
 
 jobs:
   build-and-push:
