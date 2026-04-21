@@ -113,7 +113,7 @@ class YesCaptchaSolver:
                 "websiteURL": url,
                 "websiteKey": sitekey
             },
-            "softID": "62709",
+            "softID": "116190",
         }
         
         # 如果需要添加用户代理

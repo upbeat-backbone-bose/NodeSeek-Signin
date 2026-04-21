@@ -184,6 +184,40 @@ curl -X POST https://your-worker-name.your-subdomain.workers.dev/checkin
 - Cookie 失效时会自动重新登录（需要解决验证码）
 - 建议定期手动登录一次，更新 `NS_COOKIE` 环境变量
 
+### 关于 Telegram 通知
+
+#### BotToken 配置要求
+
+**强烈建议配置 `BotToken`**。代码中的逻辑如下：
+
+```javascript
+if (botToken && botToken.trim() !== '') {
+  // ✅ 使用官方 Telegram API
+  url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+} else {
+  // ⚠️ BotToken 为空时，使用第三方代理
+  url = `https://api.tg.090227.xyz/sendMessage`;
+}
+```
+
+#### 第三方代理风险说明
+
+| 情况 | BotToken 配置 | 目标域名 | BotToken 是否发送 | 发送内容 |
+|------|---------------|----------|-------------------|----------|
+| 正常配置 | 已配置 | `api.telegram.org` | **否** | 消息内容 |
+| 回退方案 | 未配置 | `api.tg.090227.xyz` | **不适用** - Token 为空 | `chat_id` + 消息内容 |
+
+**风险评估**：
+- ✅ **BotToken 不会被发送到第三方** - 当 `BotToken` 为空时，说明用户未配置，第三方也无可用凭据
+- ⚠️ **`chat_id` 和消息内容会被第三方获取** - 第三方服务商可能记录你的 Telegram ID 和签到消息
+
+**建议**：
+1. **务必配置 `BotToken`**，使用官方 Telegram API
+2. 如因网络问题无法访问 Telegram 官方 API，必须使用第三方代理时：
+   - 理解并接受 `chat_id` 和消息内容会被第三方获取的风险
+   - 签到结果消息通常为公开信息（成功/失败状态），敏感度较低
+3. 第三方代理地址 `api.tg.090227.xyz` 由第三方运营，存在服务稳定性风险
+
 ## 故障排查
 
 ### 1. 签到失败
@@ -218,11 +252,13 @@ curl -X POST https://your-worker-name.your-subdomain.workers.dev/checkin
 - Bot Token 或 Chat ID 错误
 - Bot 未启动或被封禁
 - Telegram API 被墙
+- 未配置 BotToken（会使用第三方代理，但不稳定）
 
 **解决方法：**
-- 验证 Bot Token 和 Chat ID
+- 验证 Bot Token 和 Chat ID 是否正确
 - 与 Bot 对话一次激活
-- 使用代理或第三方 API（不推荐）
+- **务必配置 BotToken** 使用官方 API，详见上方「关于 Telegram 通知」章节
+- 如必须使用第三方代理，需接受 `chat_id` 和消息内容被第三方获取的风险
 
 ### 4. 定时任务未执行
 
