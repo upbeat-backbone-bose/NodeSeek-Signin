@@ -2,11 +2,23 @@
 
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from curl_cffi import requests
 from yescaptcha import YesCaptchaSolver, YesCaptchaSolverError
 from turnstile_solver import TurnstileSolver, TurnstileSolverError
+
+
+_print = print
+_debug_mutex = threading.Lock()
+
+
+def _debug_print(*args, **kwargs):
+    """调试模式下打印详细调试信息。"""
+    if DEBUG_MODE:
+        with _debug_mutex:
+            _print("[DEBUG]", *args, **kwargs)
 
 def _get_env_str(name: str, default: str = "") -> str:
     """读取环境变量并去掉空白；若为空字符串则回退 default。"""
@@ -44,12 +56,6 @@ def _get_env_bool(name: str, default: bool = False) -> bool:
 
 
 DEBUG_MODE = _get_env_bool("DEBUG", False)
-
-
-def _debug_print(*args, **kwargs):
-    """调试模式下打印详细调试信息。"""
-    if DEBUG_MODE:
-        print(*args, **kwargs)
 
 
 def _get_impersonate_candidates() -> list[str]:
