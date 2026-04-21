@@ -24,7 +24,7 @@ jobs:
           echo "Checking for outdated GitHub Actions..."
           
           # 使用 grep 查找所有 workflow 文件中的 actions 版本（排除自身）
-          echo "outdated=$(grep -E "^[[:space:]]*uses: actions/" .github/workflows/*.yml | grep -v "update-actions.yml" | sed 's/.*: *uses: actions\/\([^@]*\)@\(.*\)/{"action":"\1","version":"\2"}/' | jq -s '.' 2>/dev/null || echo '[]')" >> $GITHUB_OUTPUT
+          echo "outdated=$(grep -E "^[[:space:]]*uses: actions/" .github/workflows/*.yml | grep -v "update-actions.yml" | sed 's/.*: *uses: actions\/\([^@]*\)@\(.*\)/{"action":"\1","version":"\2"}/' | jq -c '.' 2>/dev/null || echo '[]')" >> $GITHUB_OUTPUT
 
       - name: 输出检测结果
         run: |
