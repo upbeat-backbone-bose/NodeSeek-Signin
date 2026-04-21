@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  workflows: write
 
 jobs:
   outdated-actions:
@@ -15,7 +14,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      workflows: write
     steps:
       - name: 检出仓库
         uses: actions/checkout@v6
@@ -88,43 +86,7 @@ jobs:
             
             console.log(`发现 ${results.length} 个需要更新的 actions`);
             
-            // 更新 workflow 文件
-            const fs = require('fs');
-            const path = require('path');
-            
-            for (const r of results) {
-              const workflowPath = path.join(process.cwd(), '.github/workflows/blank.yml');
-              let content = fs.readFileSync(workflowPath, 'utf8');
-              
-              // 替换版本号
-              const oldPattern = `actions/${r.action}@${r.current}`;
-              const newPattern = `actions/${r.action}@${r.latest}`;
-              
-              if (content.includes(oldPattern)) {
-                content = content.replace(oldPattern, newPattern);
-                fs.writeFileSync(workflowPath, content);
-                console.log(`已更新 ${r.action}: ${r.current} -> ${r.latest}`);
-              }
-            }
-            
-            // 创建新分支并推送更新
-            const { execSync } = require('child_process');
-            const branchName = `github-actions/update-${Date.now()}`;
-            
-            try {
-              execSync(`git checkout -b ${branchName}`, { cwd: process.cwd() });
-              execSync(`git add .github/workflows/blank.yml`, { cwd: process.cwd() });
-              execSync(`git config user.name "github-actions[bot]"`, { cwd: process.cwd() });
-              execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`, { cwd: process.cwd() });
-              execSync(`git commit -m "ci: 更新 GitHub Actions 版本"`, { cwd: process.cwd() });
-              execSync(`git push -u origin ${branchName}`, { cwd: process.cwd() });
-              console.log(`已推送分支: ${branchName}`);
-            } catch (e) {
-              console.log('推送分支失败:', e.message);
-              return;
-            }
-            
-            // 生成 PR
+            // 生成 PR 报告
             let report = '## GitHub Actions 更新报告\n\n';
             report += '检测到以下 actions 有可用更新：\n\n';
             report += '| Action | 当前版本 | 最新版本 |\n';
@@ -134,13 +96,30 @@ jobs:
               report += `| ${r.action} | ${r.current} | ${r.latest} |\n`;
             }
             
+            report += '\n\n请手动更新以下文件中的版本号：\n\n';
+            report += '```bash\n';
+            for (const r of results) {
+              report += `# 更新 ${r.action}\n`;
+              report += `sed -i 's/actions\\/${r.action}@${r.current}/actions\\/${r.action}@${r.latest}/g' .github/workflows/*.yml\n`;
+            }
+            report += '```\n';
+            
+            report += '\n\n或使用 `gh` 命令：\n';
+            report += '```bash\n';
+            report += `# 手动编辑文件后提交\n`;
+            report += `git add .github/workflows/*.yml && git commit -m "ci: 更新 GitHub Actions 版本"\n`;
+            report += '```\n';
+            
             // 创建 PR
-            console.log('创建新的更新 PR');
+            const branchName = `github-actions/update-${Date.now()}`;
+            
             await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: 'ci: 更新 GitHub Actions 版本',
               head: branchName,
               base: 'main',
-              body: report + '\n\n请检查上述更新并在确认后合并。'
+              body: report
             });
+            
+            console.log(`已创建 PR: ci: 更新 GitHub Actions 版本`);
