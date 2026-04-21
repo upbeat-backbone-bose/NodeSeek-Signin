@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  workflows: write
 
 jobs:
   outdated-actions:
@@ -14,6 +15,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      workflows: write
     steps:
       - name: 检出仓库
         uses: actions/checkout@v6
