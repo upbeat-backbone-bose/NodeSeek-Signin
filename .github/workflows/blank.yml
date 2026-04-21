@@ -18,10 +18,10 @@ jobs:
 
     steps:
       - name: 检出代码仓库
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: 配置Python环境
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11.8'
 
