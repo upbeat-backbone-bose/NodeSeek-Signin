@@ -78,6 +78,9 @@ def _get_impersonate_candidates() -> list[str]:
     "chrome131",
     "chrome133a",
     "chrome136",
+    "chrome142",
+    "chrome145",
+    "chrome146",
 
     # Chrome (Android)
     "chrome99_android",
@@ -90,17 +93,29 @@ def _get_impersonate_candidates() -> list[str]:
     # Safari
     "safari153",
     "safari155",
+    "safari15_3",
+    "safari15_5",
     "safari170",
     "safari172_ios",
+    "safari17_0",
+    "safari17_2_ios",
     "safari180",
     "safari180_ios",
     "safari184",
     "safari184_ios",
+    "safari18_0",
+    "safari18_0_ios",
     "safari260",
+    "safari2601",
     "safari260_ios",
 
-    # Firefox / Tor
+    # Firefox
     "firefox133",
+    "firefox135",
+    "firefox144",
+    "firefox147",
+
+    # Tor
     "tor145",
     ]
 
@@ -111,7 +126,7 @@ def _get_impersonate_candidates() -> list[str]:
     return candidates
 
 
-IMPERSONATE_VERSION = _get_env_str("NS_IMPERSONATE", "chrome110")
+IMPERSONATE_VERSION = _get_env_str("NS_IMPERSONATE", "chrome146")
 IMPERSONATE_CANDIDATES = _get_impersonate_candidates()
 REQUEST_TIMEOUT = _get_env_int("TIMEOUT", 15)
 

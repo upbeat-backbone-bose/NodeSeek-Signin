@@ -65,7 +65,7 @@
 | `NS_RANDOM` | 可选 | true | 是否随机签到（true/false） |
 | `RUN_AT` | 可选 | `09:00-21:00` | **仅 Docker Compose 可用**。设置定时任务执行时间，支持固定时间 `10:30` 或时间范围 `10:00-18:00` |
 | `TIMEOUT` | 可选 | 15 | 网络请求超时时间（秒），避免目标服务异常时请求卡死 |
-| `NS_IMPERSONATE` | 可选 | chrome110 | 浏览器指纹版本，用于绕过 Cloudflare 检测 |
+| `NS_IMPERSONATE` | 可选 | chrome146 | 浏览器指纹版本，用于绕过 Cloudflare 检测 |
 | `DEBUG` | 可选 | false | 开启后输出详细调试信息（异常详情、API 响应等），**默认关闭以保护敏感信息安全** |
 
 ### 验证码配置
