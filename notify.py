@@ -237,7 +237,7 @@ def feishu_bot(title: str, content: str) -> None:
     if response.get("StatusCode") == 0 or response.get("code") == 0:
         print("飞书 推送成功！")
     else:
-        print("飞书 推送失败！错误信息如下：\n", response)
+        print("飞书 推送失败！")
 
 
 def go_cqhttp(title: str, content: str) -> None:
@@ -298,7 +298,7 @@ def iGot(title: str, content: str) -> None:
     if response["ret"] == 0:
         print("iGot 推送成功！")
     else:
-        print(f'iGot 推送失败！{response["errMsg"]}')
+        print('iGot 推送失败！')
 
 
 def serverJ(title: str, content: str) -> None:
@@ -320,7 +320,7 @@ def serverJ(title: str, content: str) -> None:
     if response.get("errno") == 0 or response.get("code") == 0:
         print("serverJ 推送成功！")
     else:
-        print(f'serverJ 推送失败！错误码：{response["message"]}')
+        print('serverJ 推送失败！')
 
 
 def pushdeer(title: str, content: str) -> None:
@@ -346,7 +346,7 @@ def pushdeer(title: str, content: str) -> None:
     if len(response.get("content").get("result")) > 0:
         print("PushDeer 推送成功！")
     else:
-        print("PushDeer 推送失败！错误信息：", response)
+        print("PushDeer 推送失败！")
 
 
 def chat(title: str, content: str) -> None:
@@ -364,7 +364,7 @@ def chat(title: str, content: str) -> None:
     if response.status_code == 200:
         print("Chat 推送成功！")
     else:
-        print("Chat 推送失败！错误信息：", response)
+        print("Chat 推送失败！")
 
 
 def pushplus_bot(title: str, content: str) -> None:
@@ -484,7 +484,7 @@ def wecom_app(title: str, content: str) -> None:
     if response == "ok":
         print("企业微信推送成功！")
     else:
-        print("企业微信推送失败！错误信息如下：\n", response)
+        print("企业微信推送失败！")
 
 
 class WeCom:
@@ -653,11 +653,10 @@ def aibotk(title: str, content: str) -> None:
     body = json.dumps(data).encode(encoding="utf-8")
     headers = {"Content-Type": "application/json"}
     response = requests.post(url=url, data=body, headers=headers, timeout=REQUEST_TIMEOUT).json()
-    print(response)
     if response["code"] == 0:
         print("智能微秘书 推送成功！")
     else:
-        print(f'智能微秘书 推送失败！{response["error"]}')
+        print('智能微秘书 推送失败！')
 
 
 def smtp(title: str, content: str) -> None:
@@ -734,7 +733,7 @@ def pushme(title: str, content: str) -> None:
     if response.status_code == 200 and response.text == "success":
         print("PushMe 推送成功！")
     else:
-        print(f"PushMe 推送失败！{response.status_code} {response.text}")
+        print("PushMe 推送失败！")
 
 
 def chronocat(title: str, content: str) -> None:
@@ -873,7 +872,7 @@ def custom_notify(title: str, content: str) -> None:
     if response.status_code == 200:
         print("自定义通知推送成功！")
     else:
-        print(f"自定义通知推送失败！{response.status_code} {response.text}")
+        print("自定义通知推送失败！")
 
 
 def one() -> str:
