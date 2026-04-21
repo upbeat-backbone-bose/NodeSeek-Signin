@@ -18,53 +18,40 @@ jobs:
       - name: 检出仓库
         uses: actions/checkout@v6
 
-      - name: 列出过时的 actions
-        id: outdated
+      - name: 查找过时的 actions
+        id: find
+        run: |
+          echo "Checking for outdated GitHub Actions..."
+          
+          # 使用 grep 查找所有 workflow 文件中的 actions 版本
+          echo "outdated=$(grep -r "uses: actions/" .github/workflows/ | sed 's/.*uses: actions\/\([^@]*\)@\(.*\)/{"action":"\1","version":"\2"}/' | jq -s '.' 2>/dev/null || echo '[]')" >> $GITHUB_OUTPUT
+
+      - name: 输出检测结果
+        run: |
+          echo "检测到的 actions:"
+          echo '${{ steps.find.outputs.outdated }}' | jq '.'
+
+      - name: 检查并更新过时的 actions
+        if: steps.find.outputs.outdated != '[]' && steps.find.outputs.outdated != ''
         uses: actions/github-script@v7
         with:
-          result-encoding: string
           script: |
-            const fs = require('fs');
-            const path = require('path');
+            const outdatedStr = `${{ steps.find.outputs.outdated }}`;
             
-            const workflowsDir = '.github/workflows';
-            const outdatedActions = [];
-            
-            // 读取所有 workflow 文件
-            const workflowFiles = fs.readdirSync(workflowsDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
-            
-            for (const workflowFile of workflowFiles) {
-              const workflowPath = path.join(workflowsDir, workflowFile);
-              const content = fs.readFileSync(workflowPath, 'utf8');
-              
-              // 匹配 uses: actions/ 开头的行
-              const actionRegex = /uses:\s+actions\/([^@]+)@([^\s]+)/g;
-              let match;
-              
-              while ((match = actionRegex.exec(content)) !== null) {
-                const action = match[1];
-                const currentVersion = match[2];
-                outdatedActions.push({
-                  workflow: workflowFile,
-                  action: action,
-                  currentVersion: currentVersion
-                });
-              }
+            if (!outdatedStr || outdatedStr === '[]') {
+              console.log('所有 GitHub Actions 都已是最新版本');
+              return;
             }
             
-            // 输出结果供后续步骤使用
-            console.log('JSON_OUTPUT:' + JSON.stringify(outdatedActions));
+            let outdatedActions;
+            try {
+              outdatedActions = JSON.parse(outdatedStr);
+            } catch (e) {
+              console.log('解析 actions 列表失败:', e.message);
+              return;
+            }
             
-      - name: 检查并更新过时的 actions
-        if: steps.outdated.outputs.result != ''
-        uses: actions/github-script@v7
-        env:
-          OUTDATED_ACTIONS: ${{ steps.outdated.outputs.result }}
-        with:
-          script: |
-            const outdatedActions = JSON.parse(process.env.OUTDATED_ACTIONS);
-            
-            if (outdatedActions.length === 0) {
+            if (!Array.isArray(outdatedActions) || outdatedActions.length === 0) {
               console.log('所有 GitHub Actions 都已是最新版本');
               return;
             }
@@ -72,21 +59,23 @@ jobs:
             const results = [];
             
             for (const item of outdatedActions) {
-              // 获取最新的 release 版本
-              const response = await github.rest.repos.getLatestRelease({
-                owner: 'actions',
-                repo: item.action
-              });
-              
-              const latestVersion = response.data.tag_name.replace(/^v/, '');
-              
-              if (item.currentVersion !== latestVersion) {
-                results.push({
-                  action: item.action,
-                  current: item.currentVersion,
-                  latest: latestVersion,
-                  workflow: item.workflow
+              try {
+                const response = await github.rest.repos.getLatestRelease({
+                  owner: 'actions',
+                  repo: item.action
                 });
+                
+                const latestVersion = response.data.tag_name.replace(/^v/, '');
+                
+                if (item.version !== latestVersion) {
+                  results.push({
+                    action: item.action,
+                    current: item.version,
+                    latest: latestVersion
+                  });
+                }
+              } catch (e) {
+                console.log(`获取 ${item.action} 最新版本失败:`, e.message);
               }
             }
             
@@ -95,44 +84,62 @@ jobs:
               return;
             }
             
-            // 生成更新报告
-            let report = '## GitHub Actions 更新报告\n\n';
-            report += '检测到以下 actions 有可用更新：\n\n';
-            report += '| Action | 当前版本 | 最新版本 | 所属 Workflow |\n';
-            report += '|--------|----------|----------|-------------|\n';
+            console.log(`发现 ${results.length} 个需要更新的 actions`);
+            
+            // 更新 workflow 文件
+            const fs = require('fs');
+            const path = require('path');
             
             for (const r of results) {
-              report += `| ${r.action} | ${r.current} | ${r.latest} | ${r.workflow} |\n`;
+              const workflowPath = path.join(process.cwd(), '.github/workflows/blank.yml');
+              let content = fs.readFileSync(workflowPath, 'utf8');
+              
+              // 替换版本号
+              const oldPattern = `actions/${r.action}@${r.current}`;
+              const newPattern = `actions/${r.action}@${r.latest}`;
+              
+              if (content.includes(oldPattern)) {
+                content = content.replace(oldPattern, newPattern);
+                fs.writeFileSync(workflowPath, content);
+                console.log(`已更新 ${r.action}: ${r.current} -> ${r.latest}`);
+              }
             }
             
-            // 检查是否已有相同内容的 open PR
-            const existingPR = await github.rest.pulls.list({
+            // 生成 PR
+            let report = '## GitHub Actions 更新报告\n\n';
+            report += '检测到以下 actions 有可用更新：\n\n';
+            report += '| Action | 当前版本 | 最新版本 |\n';
+            report += '|--------|----------|----------|\n';
+            
+            for (const r of results) {
+              report += `| ${r.action} | ${r.current} | ${r.latest} |\n`;
+            }
+            
+            // 检查是否已有 open PR
+            const existingPRs = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              state: 'open',
-              title: 'ci: 更新 GitHub Actions 版本'
+              state: 'open'
             });
             
-            if (existingPR.data.length > 0) {
-              console.log('已存在 open 的更新 PR，将更新其内容');
-              const prNumber = existingPR.data[0].number;
-              
+            const existingPR = existingPRs.data.find(pr => pr.title === 'ci: 更新 GitHub Actions 版本');
+            
+            if (existingPR) {
+              console.log(`已存在 PR #${existingPR.number}，将更新其内容`);
               await github.rest.pulls.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: prNumber,
-                body: report
+                pull_number: existingPR.number,
+                body: report + '\n\n请检查上述更新并在确认后合并。'
               });
             } else {
-              // 创建新 PR
+              console.log('创建新的更新 PR');
               await github.rest.pulls.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 title: 'ci: 更新 GitHub Actions 版本',
-                head: 'dependabot/github-actions',
+                head: 'github-actions/update',
                 base: 'main',
                 body: report + '\n\n请检查上述更新并在确认后合并。'
               });
             }
-            
-            console.log('更新报告已生成');
