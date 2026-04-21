@@ -26,3 +26,25 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci/cd"
+      - "dependencies"
+    reviewers:
+      - "upbeat-backbone-bose"
+    groups:
+      github-actions:
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
