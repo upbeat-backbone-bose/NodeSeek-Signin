@@ -1,7 +1,19 @@
+import os
 import requests
 import time
 from typing import Dict, Optional, Any, Union
 import json
+
+
+def _get_env_int(name: str, default: int) -> int:
+    """读取环境变量作为整数；若为空或无效则回退 default。"""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    try:
+        return int(str(v).strip())
+    except (ValueError, TypeError):
+        return default
 
 class TurnstileSolverError(Exception):
     """Turnstile 解决器错误基类"""
@@ -20,7 +32,7 @@ class TurnstileSolver:
         client_key: str,
         max_retries: int = 20,
         retry_interval: int = 6,
-        timeout: int = 60
+        timeout: int = None
     ):
         """
         初始化 Turnstile 验证码解决器
@@ -37,7 +49,7 @@ class TurnstileSolver:
         self.client_key = client_key
         self.max_retries = max_retries
         self.retry_interval = retry_interval
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else _get_env_int("TIMEOUT", 15)
     
     def solve(
         self,

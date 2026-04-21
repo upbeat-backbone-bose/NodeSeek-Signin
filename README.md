@@ -49,13 +49,14 @@
 
 ## 配置小抄
 
-### 核心变量
+### 账户与认证
 
 | 变量名 | 必需 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `NS_COOKIE` | 建议 | - | NodeSeek 论坛的用户 Cookie，多账号使用 `&` 或换行符分隔 |
-| `USER1`、`USER2`... | 可选 | - | NodeSeek 论坛用户名，当 Cookie 失效时使用 |
-| `PASS1`、`PASS2`... | 可选 | - | NodeSeek 论坛密码 |
+| `USER`、`PASS` | 可选 | - | 单账号用户名和密码，Cookie 失效时自动登录 |
+| `USER1`、`USER2`... | 可选 | - | 多账号用户名，当 Cookie 失效时使用 |
+| `PASS1`、`PASS2`... | 可选 | - | 多账号密码 |
 
 ### 签到配置
 
@@ -63,6 +64,8 @@
 |--------|------|--------|------|
 | `NS_RANDOM` | 可选 | true | 是否随机签到（true/false） |
 | `RUN_AT` | 可选 | `09:00-21:00` | **仅 Docker Compose 可用**。设置定时任务执行时间，支持固定时间 `10:30` 或时间范围 `10:00-18:00` |
+| `TIMEOUT` | 可选 | 15 | 网络请求超时时间（秒），避免目标服务异常时请求卡死 |
+| `NS_IMPERSONATE` | 可选 | chrome110 | 浏览器指纹版本，用于绕过 Cloudflare 检测 |
 
 ### 验证码配置
 
@@ -71,6 +74,14 @@
 | `SOLVER_TYPE` | 可选 | turnstile | 验证码解决方案（turnstile/yescaptcha） |
 | `API_BASE_URL` | 条件必需 | - | CloudFreed 服务地址，当 `SOLVER_TYPE=turnstile` 时必填 |
 | `CLIENTT_KEY` | 必需 | - | 验证码服务客户端密钥 |
+
+### 运行环境
+
+| 变量名 | 必需 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `IN_DOCKER` | 可选 | - | 设为 `true` 启用 Docker 环境，持久化 Cookie 到文件 |
+| `GITHUB_ACTIONS` | 自动 | - | 由 GitHub Actions 自动设置，标识运行环境 |
+| `GITHUB_REPOSITORY` | 自动 | - | 由 GitHub Actions 自动设置，格式为 `owner/repo` |
 
 ### 高级功能
 
@@ -82,7 +93,11 @@
 
 | 变量名 | 必需 | 默认值 | 说明 |
 |--------|------|--------|------|
-| 各类通知变量 | 可选 | - | 支持 Telegram、Bark、PushPlus、企业微信、邮件等渠道，详见 [`notify.py`](notify.py) |
+| `HITOKOTO` | 可选 | true | 启用一言（随机句子）作为通知前缀 |
+| `CONSOLE` | 可选 | false | 启用控制台输出通知 |
+| `SKIP_PUSH_TITLE` | 可选 | - | 跳过包含指定标题的通知，多个标题用换行分隔 |
+
+支持的推送渠道：Bark、钉钉机器人、飞书机器人、go-cqhttp、gotify、iGot、serverJ、PushDeer、PushPlus、微加机器人、Qmsg、企业微信机器人、企业微信应用、Telegram、智能微秘书、SMTP 邮件、PushMe、CHRONOCAT、自定义 WebHook。详见 [`notify.py`](notify.py)。
 
 > 完整变量说明请参阅 [配置文档](docs/configuration/config.md)。
 

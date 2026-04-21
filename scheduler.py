@@ -21,7 +21,7 @@ def get_run_config():
     - 未设置或格式错误: 默认为 '08:00-10:59'
     返回一个元组 (mode, value)
     """
-    run_at_env = os.environ.get('RUN_AT', '08:00-10:59')
+    run_at_env = os.environ.get('RUN_AT', '09:00-21:00')
 
     if re.fullmatch(r'\d{2}:\d{2}', run_at_env):
         print(f"检测到固定时间模式: {run_at_env}", flush=True)
