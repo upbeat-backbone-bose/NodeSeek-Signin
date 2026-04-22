@@ -4,6 +4,8 @@
 
 本项目支持通过 GitHub Actions 自动构建并发布 Docker 镜像到 Docker Hub。
 
+**镜像地址**：[https://hub.docker.com/r/ryachueng/nodeseek-signin](https://hub.docker.com/r/ryachueng/nodeseek-signin)
+
 ## 触发条件
 
 当在 GitHub 上创建或发布新的 Release 时，自动触发 Docker 镜像的构建和发布。
@@ -42,9 +44,8 @@
 
 | 标签 | 说明 | 示例 |
 |------|------|------|
+| `v{version}` | git tag 版本 | `nodeseek-signin:v0.0.1` |
 | `latest` | 最新版本 | `nodeseek-signin:latest` |
-| `{version}` | 版本号（去v） | `nodeseek-signin:1.0.0` |
-| `sha-{commit}` | Commit SHA | `nodeseek-signin:sha-abc1234` |
 
 ## 本地构建
 
@@ -64,10 +65,12 @@ docker run -d \
 ## Dockerfile 参考
 
 ```dockerfile
-FROM python:3.9-alpine
+FROM python:3.14-alpine
 
 RUN apk add --no-cache tzdata ca-certificates
 ENV TZ=Asia/Shanghai
+
+RUN pip install --no-cache-dir --upgrade pip
 
 WORKDIR /app
 
