@@ -46,6 +46,26 @@
 
 > 🎯 以上文档包含详细步骤、示例命令及截图，README 仅保留概览。
 
+## 📚 文档站（GitHub Pages）
+
+仓库已提供 MkDocs 配置与 Pages 工作流：
+
+- 配置文件：`mkdocs.yml`
+- 发布工作流：`.github/workflows/docs-pages.yml`
+- 文档目录：`docs/`（含 `docs/wiki/`）
+
+首次启用请在 GitHub 仓库中设置：
+
+1. 进入 `Settings -> Pages`
+2. `Build and deployment` 选择 `GitHub Actions`
+
+本地预览命令：
+
+```bash
+pip install -r requirements-dev.txt
+mkdocs serve
+```
+
 ## 配置小抄
 
 ### 账户与认证

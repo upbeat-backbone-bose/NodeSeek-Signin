@@ -19,3 +19,9 @@ Thumbs.db
 # IDE/Editor configuration
 .vscode/
 .idea/
+
+# Local process artifacts
+.monkeycode/
+
+# MkDocs build output
+site/

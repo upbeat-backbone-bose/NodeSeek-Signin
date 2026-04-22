@@ -1,0 +1,41 @@
+site_name: NodeSeek-Signin Docs
+site_description: NodeSeek-Signin project documentation and DeepWiki
+site_url: https://upbeat-backbone-bose.github.io/NodeSeek-Signin/
+repo_url: https://github.com/upbeat-backbone-bose/NodeSeek-Signin
+repo_name: upbeat-backbone-bose/NodeSeek-Signin
+
+theme:
+  name: material
+  language: zh
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+
+nav:
+  - 首页: index.md
+  - 使用文档:
+      - 环境变量手册: configuration/config.md
+      - 验证码解决方案: configuration/solutions.md
+      - GitHub Actions 部署: deployment/github-actions.md
+      - Docker Compose 部署: deployment/docker-compose.md
+      - Docker 镜像构建发布: deployment/docker.md
+      - Cloudflare Worker 部署: deployment/cloudflare-worker.md
+      - 青龙面板部署: deployment/qinglong-panel.md
+  - DeepWiki:
+      - 总览: wiki/index.md
+      - 系统架构: wiki/architecture.md
+      - 接口说明: wiki/interfaces.md
+      - 开发者指南: wiki/developer-guide.md
+      - 核心概念:
+          - 账号与 Cookie 生命周期: wiki/concepts/account-cookie-lifecycle.md
+      - 模块说明:
+          - nodeseek_sign.py: wiki/modules/nodeseek-sign.md
+          - scheduler.py: wiki/modules/scheduler.md
+          - solvers and notify: wiki/modules/solvers-and-notify.md
+          - cloudflare worker: wiki/modules/cloudflare-worker.md
+          - ci workflows: wiki/modules/ci-workflows.md
