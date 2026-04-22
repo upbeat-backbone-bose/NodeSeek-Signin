@@ -56,7 +56,6 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
-            type=semver,pattern={{version}}
             type=sha,prefix=
             type=raw,value=test,enable=${{ github.event.inputs.docker_tags == 'test' }}
 
