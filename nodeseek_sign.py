@@ -566,7 +566,7 @@ def print_signin_stats(stats, account_name):
 if __name__ == "__main__":
     solver_type = os.getenv("SOLVER_TYPE", "turnstile")
     api_base_url = os.getenv("API_BASE_URL", "")
-    client_key = os.getenv("CLIENTT_KEY", "") 
+    client_key = os.getenv("CLIENT_KEY", "") 
     ns_random = os.getenv("NS_RANDOM", "false")
 
     env_type = detect_environment()
