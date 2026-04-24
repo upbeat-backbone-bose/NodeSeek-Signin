@@ -51,7 +51,7 @@ jobs:
           # 验证码配置
           SOLVER_TYPE: ${{ secrets.SOLVER_TYPE }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          CLIENTT_KEY: ${{ secrets.CLIENTT_KEY }}
+          CLIENT_KEY: ${{ secrets.CLIENT_KEY }}
           
           # GitHub API配置
           GH_PAT: ${{ secrets.GH_PAT }}
