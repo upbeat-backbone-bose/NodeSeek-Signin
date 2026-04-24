@@ -20,7 +20,7 @@
 
 - `SOLVER_TYPE`: `turnstile` 或 `yescaptcha`，默认 `turnstile`。
 - `API_BASE_URL`: 验证码服务地址（turnstile 模式必需）。
-- `CLIENTT_KEY`: 验证码服务密钥（名称固定，双 T）。
+- `CLIENT_KEY`: 验证码服务密钥。
 
 ### 2.3 网络与调试
 

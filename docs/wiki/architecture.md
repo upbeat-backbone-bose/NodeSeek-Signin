@@ -34,7 +34,7 @@
 
 - `TurnstileSolver`: 对接自建兼容 API（如 CloudFreed 风格 `/createTask`、`/getTaskResult`）。
 - `YesCaptchaSolver`: 对接 YesCaptcha 托管服务。
-- 统一通过 `CLIENTT_KEY`（双 T）读取密钥。
+- 统一通过 `CLIENT_KEY` 读取密钥。
 
 ### 2.4 通知模块（notify.py）
 

@@ -33,7 +33,7 @@ services:
 | :------: | :--- |
 | `SOLVER_TYPE` | 设置为 `turnstile` |
 | `API_BASE_URL` | CloudFreed 服务地址，如 `http://127.0.0.1:3000` |
-| `CLIENTT_KEY` | CloudFreed 服务密钥（如果有的话） |
+| `CLIENT_KEY` | CloudFreed 服务密钥（如果有的话） |
 | `USER1`/`PASS1`... | NodeSeek 论坛用户名/密码 |
 
 ### 示例配置
@@ -42,7 +42,7 @@ services:
 # .env 文件示例
 SOLVER_TYPE=turnstile
 API_BASE_URL=http://127.0.0.1:3000
-CLIENTT_KEY=your_client_key_here
+CLIENT_KEY=your_client_key_here
 USER1=your_username
 PASS1=your_password
 ```
@@ -64,7 +64,7 @@ YesCaptcha 是托管式验证码解决服务，无需自行部署。
 
 | 变量名称 | 说明 |
 | :------: | :--- |
-| `CLIENTT_KEY` | YesCaptcha 的 API 密钥 |
+| `CLIENT_KEY` | YesCaptcha 的 API 密钥 |
 | `USER1`/`USER2`... | NodeSeek 论坛用户名 |
 | `PASS1`/`PASS2`... | NodeSeek 论坛密码 |
 | `SOLVER_TYPE` | 设置为 `yescaptcha` |
@@ -93,7 +93,7 @@ YesCaptcha 是托管式验证码解决服务，无需自行部署。
 
 - 检查 `SOLVER_TYPE` 是否与验证码服务匹配
 - 确认 `API_BASE_URL` 可访问
-- 验证 `CLIENTT_KEY` 正确
+- 验证 `CLIENT_KEY` 正确
 - 查看服务日志排查具体错误
 
 ### 2. 达到最大重试次数

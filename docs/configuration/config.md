@@ -20,7 +20,7 @@
 | --- | --- | --- | --- |
 | `SOLVER_TYPE` | 可选 | `turnstile` | `turnstile` 表示自建 CloudFreed / Cloudflyer 等接口；`yescaptcha` 表示托管服务 |
 | `API_BASE_URL` | 条件必填 | 空字符串 | 指向自建服务或 YesCaptcha 的 API 地址，如 `http://127.0.0.1:3000` 或 `https://api.yescaptcha.com` |
-| `CLIENTT_KEY` | 必填 | - | 验证码服务密钥，CloudFreed 与 YesCaptcha 都使用该名称（注意拼写为 `CLIENTT`） |
+| `CLIENT_KEY` | 必填 | - | 验证码服务密钥，CloudFreed 与 YesCaptcha 都使用该名称 |
 
 > ℹ️ 更多供应商注意事项见 `docs/configuration/solutions.md`。
 
@@ -76,14 +76,14 @@
 | 场景 | 最少需要配置 | 建议额外配置 |
 | --- | --- | --- |
 | **GitHub Actions** | `NS_COOKIE` 或 `USERn/PASSn` + 验证码变量 | `GH_PAT`（自动回写 Cookie）、`TG_*`（通知） |
-| **Docker Compose / 本地定时** | `.env` 中的 `NS_COOKIE` 或账号、`SOLVER_TYPE`、`CLIENTT_KEY`，并可使用 `RUN_AT` 控制时间 | `IN_DOCKER=true`（启用文件存储 Cookie）、任意通知变量 |
+| **Docker Compose / 本地定时** | `.env` 中的 `NS_COOKIE` 或账号、`SOLVER_TYPE`、`CLIENT_KEY`，并可使用 `RUN_AT` 控制时间 | `IN_DOCKER=true`（启用文件存储 Cookie）、任意通知变量 |
 | **青龙面板** | 直接在面板变量中写入 `NS_COOKIE` 或 `USERn/PASSn`、验证码变量 | 配置任意通知变量，支持与青龙自带通知并存 |
 
 ## 7. 调试与排障建议
 
 1. 利用 `.env.example` 复制生成 `.env`，逐项填值，便于与仓库更新保持同步。
 2. 本地调试可运行 `python test_run.py` 验证配置是否生效；Docker/青龙请先确认 `RUN_AT` 是否在可接受的时段内。
-3. 如果启用了账号密码但依然无法自动登录，请确认 `SOLVER_TYPE`、`API_BASE_URL`、`CLIENTT_KEY` 是否匹配对应的验证码服务。
+3. 如果启用了账号密码但依然无法自动登录，请确认 `SOLVER_TYPE`、`API_BASE_URL`、`CLIENT_KEY` 是否匹配对应的验证码服务。
 4. 若通知未触发，可在同一个 shell 中临时导出变量后执行 `python notify.py` 做自检。
 
 通过本文档即可对照自己的部署场景，快速核验环境变量是否齐全，减少因配置遗漏导致的签到失败。

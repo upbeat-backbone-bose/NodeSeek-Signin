@@ -45,7 +45,7 @@ mkdocs build
 ## 3. 关键调试点
 
 - 登录失败排查：
-  - 检查 `SOLVER_TYPE`、`API_BASE_URL`、`CLIENTT_KEY`。
+  - 检查 `SOLVER_TYPE`、`API_BASE_URL`、`CLIENT_KEY`。
   - 验证账号密码是否与目标账号匹配。
 - Cookie 失效行为：
   - 无账号密码时只会报失败，不会自动恢复。
@@ -58,7 +58,7 @@ mkdocs build
 
 - 修改通知相关逻辑时，同步检查 `nodeseek_sign.py` 与 `notify.py` 的超时和开关读取。
 - 修改调度行为时，确认 `docker-compose.yml` 和 `.github/workflows/blank.yml` 的运行入口是否仍一致。
-- 修改验证码参数命名时，不要更改 `CLIENTT_KEY` 变量名。
+- 修改验证码参数命名时，不要更改 `CLIENT_KEY` 变量名。
 
 ## 5. 回归验证清单
 

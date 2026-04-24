@@ -93,7 +93,7 @@ mkdocs serve
 |--------|------|--------|------|
 | `SOLVER_TYPE` | 可选 | turnstile | 验证码解决方案（turnstile/yescaptcha） |
 | `API_BASE_URL` | 条件必需 | - | CloudFreed 服务地址，当 `SOLVER_TYPE=turnstile` 时必填 |
-| `CLIENTT_KEY` | 必需 | - | 验证码服务客户端密钥 |
+| `CLIENT_KEY` | 必需 | - | 验证码服务客户端密钥 |
 
 ### 运行环境
 
