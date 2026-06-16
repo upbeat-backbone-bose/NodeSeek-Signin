@@ -455,8 +455,14 @@ def get_signin_stats(ns_cookie, days=30):
         shanghai_tz = ZoneInfo("Asia/Shanghai")
         now_shanghai = datetime.now(shanghai_tz)
         
-        # 计算查询开始时间：当前时间减去指定天数
-        query_start_time = now_shanghai - timedelta(days=days)
+        # 计算查询开始时间：今天0点减去指定天数
+        # 使用 today_start 而非 now_shanghai，确保窗口边界固定在日期边界
+        # 避免因脚本运行时间不同导致同一条记录被排除在外
+        today_start = datetime(
+            now_shanghai.year, now_shanghai.month, now_shanghai.day,
+            tzinfo=shanghai_tz
+        )
+        query_start_time = today_start - timedelta(days=days)
         
         # 获取多页数据以确保覆盖指定天数内的所有数据
         all_records = []
@@ -507,7 +513,7 @@ def get_signin_stats(ns_cookie, days=30):
             record_time = datetime.fromisoformat(
                 timestamp.replace('Z', '+00:00'))
             record_time_shanghai = record_time.astimezone(shanghai_tz)
-            
+
             # 只统计指定天数内的签到收益
             if (record_time_shanghai >= query_start_time and
                     "签到收益" in description and "鸡腿" in description):
@@ -516,7 +522,7 @@ def get_signin_stats(ns_cookie, days=30):
                     'date': record_time_shanghai.strftime('%Y-%m-%d'),
                     'description': description
                 })
-        
+
         # 生成时间范围描述
         period_desc = f"近{days}天"
         if days == 1:
@@ -560,7 +566,7 @@ def print_signin_stats(stats, account_name):
     print(f"签到天数: {stats['days_count']} 天")
     print(f"总获得鸡腿: {stats['total_amount']} 个")
     print(f"平均每日鸡腿: {stats['average']} 个")
-    
+
 
 # ---------------- 主流程 ----------------
 if __name__ == "__main__":
