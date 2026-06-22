@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: 查找过时的 actions
         id: find
