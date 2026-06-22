@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: 检出代码仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       
       - name: 配置Python环境
         uses: actions/setup-python@v6
