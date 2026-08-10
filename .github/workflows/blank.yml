@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v7
       
       - name: 配置Python环境
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11.8'
 
