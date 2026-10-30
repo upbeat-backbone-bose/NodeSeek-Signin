@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # _*_ coding:utf-8 _*_
 import base64
+import builtins
 import hashlib
 import hmac
 import json
 import os
 import re
+import ssl
 import threading
 import time
 import urllib.parse
@@ -14,30 +16,30 @@ from email.mime.text import MIMEText
 from email.header import Header
 from email.utils import formataddr
 
-import requests
+try:
+    import requests
+except ImportError:  # optional dependency
+    requests = None
+
+from config import (
+    DEBUG_MODE,
+    REQUEST_TIMEOUT,
+    get_env_int,
+)
+
+NOTIFY_THREAD_TIMEOUT = max(5, get_env_int("NOTIFY_THREAD_TIMEOUT", 30))
 
 
-def _get_env_int(name: str, default: int) -> int:
-    """读取环境变量作为整数；若为空或无效则回退 default。"""
-    v = os.getenv(name)
-    if v is None:
-        return default
-    try:
-        return int(str(v).strip())
-    except (ValueError, TypeError):
-        return default
+def _config_bool(value) -> bool:
+    """解析 push_config 中的布尔值。
 
-
-def _get_env_bool(name: str, default: bool = False) -> bool:
-    """读取环境变量作为布尔值；支持 true/false/1/0。"""
-    v = os.getenv(name)
-    if v is None:
-        return default
-    return v.lower() in ("true", "1", "yes")
-
-
-REQUEST_TIMEOUT = _get_env_int("TIMEOUT", 15)
-DEBUG_MODE = _get_env_bool("DEBUG", False)
+    这里刻意不复用 ``config.get_env_bool``：push_config 的值来源有三处
+    （环境变量字符串、NOTIFY_CONFIG_JSON 解析出的原生 bool、代码内的默认值），
+    类型不统一，``get_env_bool`` 只处理环境变量字符串。
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("true", "1", "yes", "on")
 
 
 def _debug_print(*args, **kwargs):
@@ -47,8 +49,11 @@ def _debug_print(*args, **kwargs):
             _print("[DEBUG]", *args, **kwargs)
 
 
-# 原先的 print 函数和主线程的锁
-_print = print
+# 原先的 print 函数和主线程的锁。
+# 用 builtins.print 显式取引用：模块内定义了同名的 print 包装函数，
+# 若直接写 _print = print，模块被 reload 时会绑定到包装函数自身，
+# 造成 mutex 重入死锁。
+_print = builtins.print
 mutex = threading.Lock()
 
 
@@ -132,7 +137,7 @@ push_config = {
     'AIBOTK_NAME': '',                  # 智能微秘书  发送群名 或者好友昵称和type要对应好
 
     'SMTP_SERVER': '',                  # SMTP 发送邮件服务器，形如 smtp.exmail.qq.com:465
-    'SMTP_SSL': 'false',                # SMTP 发送邮件服务器是否使用 SSL，填写 true 或 false
+    'SMTP_SSL': 'true',                 # SMTP 发送邮件服务器是否使用 SSL，填写 true 或 false
     'SMTP_EMAIL': '',                   # SMTP 收发件邮箱，通知将会由自己发给自己
     'SMTP_PASSWORD': '',                # SMTP 登录密码，也可能为特殊口令，视具体邮件服务商说明而定
     'SMTP_NAME': '',                    # SMTP 收发件人姓名，可随意填写
@@ -158,11 +163,28 @@ for k in push_config:
         v = os.getenv(k)
         push_config[k] = v
 
+# 可选：通过一个 JSON 变量传入完整通知配置，避免 CI 需要逐项映射。
+_notify_config_json = os.getenv("NOTIFY_CONFIG_JSON", "").strip()
+if _notify_config_json:
+    try:
+        _parsed_notify_config = json.loads(_notify_config_json)
+        if isinstance(_parsed_notify_config, dict):
+            for _key, _value in _parsed_notify_config.items():
+                if _key in push_config:
+                    push_config[_key] = _value
+        else:
+            print("NOTIFY_CONFIG_JSON 必须是一个 JSON 对象，已忽略")
+    except Exception:
+        print("NOTIFY_CONFIG_JSON 解析失败，已忽略")
+
 
 def bark(title: str, content: str) -> None:
     """
     使用 bark 推送消息。
     """
+    if requests is None:
+        print("bark 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("BARK_PUSH"):
         print("bark 服务的 BARK_PUSH 未设置!!\n取消推送")
         return
@@ -211,6 +233,9 @@ def dingding_bot(title: str, content: str) -> None:
     """
     使用 钉钉机器人 推送消息。
     """
+    if requests is None:
+        print("钉钉机器人 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("DD_BOT_SECRET") or not push_config.get("DD_BOT_TOKEN"):
         print("钉钉机器人 服务的 DD_BOT_SECRET 或者 DD_BOT_TOKEN 未设置!!\n取消推送")
         return
@@ -241,6 +266,9 @@ def feishu_bot(title: str, content: str) -> None:
     """
     使用 飞书机器人 推送消息。
     """
+    if requests is None:
+        print("飞书 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("FSKEY"):
         print("飞书 服务的 FSKEY 未设置!!\n取消推送")
         return
@@ -258,8 +286,11 @@ def feishu_bot(title: str, content: str) -> None:
 
 def go_cqhttp(title: str, content: str) -> None:
     """
-    使用 go_cqhttp 推送消息。
+    使用 go-cqhttp 推送消息。
     """
+    if requests is None:
+        print("go-cqhttp 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("GOBOT_URL") or not push_config.get("GOBOT_QQ"):
         print("go-cqhttp 服务的 GOBOT_URL 或 GOBOT_QQ 未设置!!\n取消推送")
         return
@@ -278,6 +309,9 @@ def gotify(title: str, content: str) -> None:
     """
     使用 gotify 推送消息。
     """
+    if requests is None:
+        print("gotify 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("GOTIFY_URL") or not push_config.get("GOTIFY_TOKEN"):
         print("gotify 服务的 GOTIFY_URL 或 GOTIFY_TOKEN 未设置!!\n取消推送")
         return
@@ -301,6 +335,9 @@ def iGot(title: str, content: str) -> None:
     """
     使用 iGot 推送消息。
     """
+    if requests is None:
+        print("iGot 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("IGOT_PUSH_KEY"):
         print("iGot 服务的 IGOT_PUSH_KEY 未设置!!\n取消推送")
         return
@@ -321,6 +358,9 @@ def serverJ(title: str, content: str) -> None:
     """
     通过 serverJ 推送消息。
     """
+    if requests is None:
+        print("serverJ 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("PUSH_KEY"):
         print("serverJ 服务的 PUSH_KEY 未设置!!\n取消推送")
         return
@@ -343,6 +383,9 @@ def pushdeer(title: str, content: str) -> None:
     """
     通过PushDeer 推送消息
     """
+    if requests is None:
+        print("PushDeer 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("DEER_KEY"):
         print("PushDeer 服务的 DEER_KEY 未设置!!\n取消推送")
         return
@@ -369,6 +412,9 @@ def chat(title: str, content: str) -> None:
     """
     通过Chat 推送消息
     """
+    if requests is None:
+        print("chat 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("CHAT_URL") or not push_config.get("CHAT_TOKEN"):
         print("chat 服务的 CHAT_URL或CHAT_TOKEN 未设置!!\n取消推送")
         return
@@ -387,12 +433,15 @@ def pushplus_bot(title: str, content: str) -> None:
     """
     通过 push+ 推送消息。
     """
+    if requests is None:
+        print("PUSHPLUS 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("PUSH_PLUS_TOKEN"):
         print("PUSHPLUS 服务的 PUSH_PLUS_TOKEN 未设置!!\n取消推送")
         return
     print("PUSHPLUS 服务启动")
 
-    url = "http://www.pushplus.plus/send"
+    url = "https://www.pushplus.plus/send"
     data = {
         "token": push_config.get("PUSH_PLUS_TOKEN"),
         "title": title,
@@ -401,26 +450,27 @@ def pushplus_bot(title: str, content: str) -> None:
     }
     body = json.dumps(data).encode(encoding="utf-8")
     headers = {"Content-Type": "application/json"}
-    response = requests.post(url=url, data=body, headers=headers, timeout=REQUEST_TIMEOUT).json()
+    try:
+        response = requests.post(
+            url=url, data=body, headers=headers, timeout=REQUEST_TIMEOUT
+        ).json()
+    except Exception as exc:
+        _debug_print(f"PUSHPLUS 推送异常: {type(exc).__name__}")
+        print("PUSHPLUS 推送失败！")
+        return
 
-    if response["code"] == 200:
+    if response.get("code") == 200:
         print("PUSHPLUS 推送成功！")
-
     else:
-        url_old = "http://pushplus.hxtrip.com/send"
-        headers["Accept"] = "application/json"
-        response = requests.post(url=url_old, data=body, headers=headers, timeout=REQUEST_TIMEOUT).json()
-
-        if response["code"] == 200:
-            print("PUSHPLUS(hxtrip) 推送成功！")
-
-        else:
-            print("PUSHPLUS 推送失败！")
+        print("PUSHPLUS 推送失败！")
 
 def weplus_bot(title: str, content: str) -> None:
     """
     通过 微加机器人 推送消息。
     """
+    if requests is None:
+        print("微加机器人 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("WE_PLUS_BOT_TOKEN"):
         print("微加机器人 服务的 WE_PLUS_BOT_TOKEN 未设置!!\n取消推送")
         return
@@ -453,6 +503,9 @@ def qmsg_bot(title: str, content: str) -> None:
     """
     使用 qmsg 推送消息。
     """
+    if requests is None:
+        print("qmsg 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("QMSG_KEY") or not push_config.get("QMSG_TYPE"):
         print("qmsg 的 QMSG_KEY 或者 QMSG_TYPE 未设置!!\n取消推送")
         return
@@ -473,6 +526,9 @@ def wecom_app(title: str, content: str) -> None:
     """
     通过 企业微信 APP 推送消息。
     """
+    if requests is None:
+        print("企业微信 APP 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("QYWX_AM"):
         print("QYWX_AM 未设置!!\n取消推送")
         return
@@ -570,6 +626,9 @@ def wecom_bot(title: str, content: str) -> None:
     """
     通过 企业微信机器人 推送消息。
     """
+    if requests is None:
+        print("企业微信机器人 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("QYWX_KEY"):
         print("企业微信机器人 服务的 QYWX_KEY 未设置!!\n取消推送")
         return
@@ -596,6 +655,9 @@ def telegram_bot(title: str, content: str) -> None:
     """
     使用 telegram 机器人 推送消息。
     """
+    if requests is None:
+        print("tg 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("TG_BOT_TOKEN") or not push_config.get("TG_USER_ID"):
         print("tg 服务的 bot_token 或者 user_id 未设置!!\n取消推送")
         return
@@ -610,10 +672,12 @@ def telegram_bot(title: str, content: str) -> None:
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = {
         "chat_id": str(push_config.get("TG_USER_ID")),
-        "message_thread_id": str(push_config.get("TG_THREAD_ID")),
         "text": f"{title}\n\n{content}",
         "disable_web_page_preview": "true",
     }
+    thread_id = str(push_config.get("TG_THREAD_ID") or "").strip()
+    if thread_id:
+        payload["message_thread_id"] = thread_id
     proxies = None
     if push_config.get("TG_PROXY_HOST") and push_config.get("TG_PROXY_PORT"):
         if push_config.get("TG_PROXY_AUTH") is not None and "@" not in push_config.get(
@@ -628,11 +692,20 @@ def telegram_bot(title: str, content: str) -> None:
             push_config.get("TG_PROXY_HOST"), push_config.get("TG_PROXY_PORT")
         )
         proxies = {"http": proxyStr, "https": proxyStr}
-    response = requests.post(
-        url=url, headers=headers, params=payload, proxies=proxies, timeout=REQUEST_TIMEOUT
-    ).json()
+    try:
+        response = requests.post(
+            url=url,
+            headers=headers,
+            params=payload,
+            proxies=proxies,
+            timeout=REQUEST_TIMEOUT,
+        ).json()
+    except Exception as exc:
+        _debug_print(f"tg 推送异常: {type(exc).__name__}")
+        print("tg 推送失败！")
+        return
 
-    if response["ok"]:
+    if response.get("ok"):
         print("tg 推送成功！")
     else:
         print("tg 推送失败！")
@@ -642,6 +715,9 @@ def aibotk(title: str, content: str) -> None:
     """
     使用 智能微秘书 推送消息。
     """
+    if requests is None:
+        print("智能微秘书 服务未设置 requests 依赖!!\n取消推送")
+        return
     if (
         not push_config.get("AIBOTK_KEY")
         or not push_config.get("AIBOTK_TYPE")
@@ -676,19 +752,43 @@ def aibotk(title: str, content: str) -> None:
         print('智能微秘书 推送失败！')
 
 
+def _parse_smtp_server(value: str, use_ssl: bool):
+    """Parse ``host`` or ``host:port``; pick a safe default port.
+
+    端口部分不是数字时丢弃端口（而不是把整串留在主机名里），
+    否则 ``smtp.example.com:notaport`` 会变成无法解析的主机名。
+    """
+    server = str(value or "").strip()
+    host, separator, port_text = server.rpartition(":")
+    if separator:
+        if port_text.isdigit():
+            return host, int(port_text)
+        return host, 465 if use_ssl else 587
+    return server, 465 if use_ssl else 587
+
+
+def _smtp_ssl_context():
+    """构建校验服务器证书的 TLS 上下文。
+
+    smtplib 默认使用 ``ssl._create_stdlib_context()``（verify_mode=CERT_NONE），
+    不会校验证书，连接可被中间人劫持。这里显式使用
+    ``ssl.create_default_context()`` 开启证书链与主机名校验。
+    """
+    return ssl.create_default_context()
+
+
 def smtp(title: str, content: str) -> None:
     """
     使用 SMTP 邮件 推送消息。
     """
     if (
         not push_config.get("SMTP_SERVER")
-        or not push_config.get("SMTP_SSL")
         or not push_config.get("SMTP_EMAIL")
         or not push_config.get("SMTP_PASSWORD")
         or not push_config.get("SMTP_NAME")
     ):
         print(
-            "SMTP 邮件 的 SMTP_SERVER 或者 SMTP_SSL 或者 SMTP_EMAIL 或者 SMTP_PASSWORD 或者 SMTP_NAME 未设置!!\n取消推送"
+            "SMTP 邮件 的 SMTP_SERVER 或者 SMTP_EMAIL 或者 SMTP_PASSWORD 或者 SMTP_NAME 未设置!!\n取消推送"
         )
         return
     print("SMTP 邮件 服务启动")
@@ -708,12 +808,21 @@ def smtp(title: str, content: str) -> None:
     )
     message["Subject"] = Header(title, "utf-8")
 
+    use_ssl = _config_bool(push_config.get("SMTP_SSL", "true"))
+    host, port = _parse_smtp_server(push_config.get("SMTP_SERVER"), use_ssl)
+    smtp_server = None
+
     try:
-        smtp_server = (
-            smtplib.SMTP_SSL(push_config.get("SMTP_SERVER"))
-            if push_config.get("SMTP_SSL") == "true"
-            else smtplib.SMTP(push_config.get("SMTP_SERVER"))
-        )
+        if use_ssl:
+            smtp_server = smtplib.SMTP_SSL(
+                host, port, timeout=REQUEST_TIMEOUT, context=_smtp_ssl_context()
+            )
+        else:
+            smtp_server = smtplib.SMTP(host, port, timeout=REQUEST_TIMEOUT)
+            smtp_server.ehlo()
+            smtp_server.starttls(context=_smtp_ssl_context())
+            smtp_server.ehlo()
+
         smtp_server.login(
             push_config.get("SMTP_EMAIL"), push_config.get("SMTP_PASSWORD")
         )
@@ -722,17 +831,25 @@ def smtp(title: str, content: str) -> None:
             push_config.get("SMTP_EMAIL"),
             message.as_bytes(),
         )
-        smtp_server.close()
         print("SMTP 邮件 推送成功！")
-    except Exception as e:
-        _debug_print(f"SMTP 邮件 推送失败: {e}")
+    except Exception as exc:
+        _debug_print(f"SMTP 邮件 推送失败: {type(exc).__name__}")
         print("SMTP 邮件 推送失败！")
+    finally:
+        if smtp_server is not None:
+            try:
+                smtp_server.quit()
+            except Exception:
+                pass
 
 
 def pushme(title: str, content: str) -> None:
     """
     使用 PushMe 推送消息。
     """
+    if requests is None:
+        print("PushMe 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("PUSHME_KEY"):
         print("PushMe 服务的 PUSHME_KEY 未设置!!\n取消推送")
         return
@@ -758,6 +875,9 @@ def chronocat(title: str, content: str) -> None:
     """
     使用 CHRONOCAT 推送消息。
     """
+    if requests is None:
+        print("CHRONOCAT 服务未设置 requests 依赖!!\n取消推送")
+        return
     if (
         not push_config.get("CHRONOCAT_URL")
         or not push_config.get("CHRONOCAT_QQ")
@@ -858,6 +978,9 @@ def custom_notify(title: str, content: str) -> None:
     """
     通过 自定义通知 推送消息。
     """
+    if requests is None:
+        print("自定义通知 服务未设置 requests 依赖!!\n取消推送")
+        return
     if not push_config.get("WEBHOOK_URL") or not push_config.get("WEBHOOK_METHOD"):
         print("自定义通知的 WEBHOOK_URL 或 WEBHOOK_METHOD 未设置!!\n取消推送")
         return
@@ -865,12 +988,19 @@ def custom_notify(title: str, content: str) -> None:
     print("自定义通知服务启动")
 
     WEBHOOK_URL = push_config.get("WEBHOOK_URL")
-    WEBHOOK_METHOD = push_config.get("WEBHOOK_METHOD")
+    WEBHOOK_METHOD = str(push_config.get("WEBHOOK_METHOD") or "").upper()
     WEBHOOK_CONTENT_TYPE = push_config.get("WEBHOOK_CONTENT_TYPE")
     WEBHOOK_BODY = push_config.get("WEBHOOK_BODY")
     WEBHOOK_HEADERS = push_config.get("WEBHOOK_HEADERS")
 
-    if "$title" not in WEBHOOK_URL and "$title" not in WEBHOOK_BODY:
+    if not str(WEBHOOK_URL).lower().startswith(("http://", "https://")):
+        print("自定义通知的 WEBHOOK_URL 必须是 http(s) URL")
+        return
+    if WEBHOOK_METHOD not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        print("自定义通知的 WEBHOOK_METHOD 不受支持")
+        return
+
+    if "$title" not in WEBHOOK_URL and "$title" not in (WEBHOOK_BODY or ""):
         print("请求头或者请求体中必须包含 $title 和 $content")
         return
 
@@ -883,9 +1013,18 @@ def custom_notify(title: str, content: str) -> None:
     formatted_url = WEBHOOK_URL.replace(
         "$title", urllib.parse.quote_plus(title)
     ).replace("$content", urllib.parse.quote_plus(content))
-    response = requests.request(
-        method=WEBHOOK_METHOD, url=formatted_url, headers=headers, timeout=15, data=body
-    )
+    try:
+        response = requests.request(
+            method=WEBHOOK_METHOD,
+            url=formatted_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            data=body,
+        )
+    except Exception as exc:
+        _debug_print(f"自定义通知推送异常: {type(exc).__name__}")
+        print("自定义通知推送失败！")
+        return
 
     if response.status_code == 200:
         print("自定义通知推送成功！")
@@ -895,19 +1034,24 @@ def custom_notify(title: str, content: str) -> None:
 
 def one() -> str:
     """
-    获取一条一言。
+    获取一条一言；失败时返回空字符串，不影响主通知。
     :return:
     """
-    url = "https://v1.hitokoto.cn/"
-    res = requests.get(url, timeout=REQUEST_TIMEOUT).json()
-    return res["hitokoto"] + "    ----" + res["from"]
+    if requests is None:
+        return ""
+    try:
+        url = "https://v1.hitokoto.cn/"
+        res = requests.get(url, timeout=REQUEST_TIMEOUT).json()
+        return res["hitokoto"] + "    ----" + res["from"]
+    except Exception:
+        return ""
 
 
 def add_notify_function():
     notify_function = []
     if push_config.get("BARK_PUSH"):
         notify_function.append(bark)
-    if push_config.get("CONSOLE"):
+    if _config_bool(push_config.get("CONSOLE")):
         notify_function.append(console)
     if push_config.get("DD_BOT_TOKEN") and push_config.get("DD_BOT_SECRET"):
         notify_function.append(dingding_bot)
@@ -945,7 +1089,6 @@ def add_notify_function():
         notify_function.append(aibotk)
     if (
         push_config.get("SMTP_SERVER")
-        and push_config.get("SMTP_SSL")
         and push_config.get("SMTP_EMAIL")
         and push_config.get("SMTP_PASSWORD")
         and push_config.get("SMTP_NAME")
@@ -967,6 +1110,15 @@ def add_notify_function():
     return notify_function
 
 
+def _run_notifier(mode, title: str, content: str) -> None:
+    """Run one channel; a broken channel must not break the others."""
+    try:
+        mode(title, content)
+    except Exception as exc:
+        _debug_print(f"{getattr(mode, '__name__', 'notify')} 推送异常: {type(exc).__name__}")
+        print(f"{getattr(mode, '__name__', 'notify')} 推送失败！")
+
+
 def send(title: str, content: str, ignore_default_config: bool = False, **kwargs):
     if kwargs:
         global push_config
@@ -982,20 +1134,32 @@ def send(title: str, content: str, ignore_default_config: bool = False, **kwargs
     # 根据标题跳过一些消息推送，环境变量：SKIP_PUSH_TITLE 用回车分隔
     skipTitle = os.getenv("SKIP_PUSH_TITLE")
     if skipTitle:
-        if title in re.split("\n", skipTitle):
+        if title in skipTitle.splitlines():
             print(f"{title} 在SKIP_PUSH_TITLE环境变量内，跳过推送！")
             return
 
-    hitokoto = push_config.get("HITOKOTO")
-    content += "\n\n" + one() if hitokoto else ""
+    if _config_bool(push_config.get("HITOKOTO")):
+        quote = one()
+        if quote:
+            content += "\n\n" + quote
 
     notify_function = add_notify_function()
     ts = [
-        threading.Thread(target=mode, args=(title, content), name=mode.__name__)
+        threading.Thread(
+            target=_run_notifier,
+            args=(mode, title, content),
+            name=mode.__name__,
+            daemon=True,
+        )
         for mode in notify_function
     ]
-    [t.start() for t in ts]
-    [t.join() for t in ts]
+    for thread in ts:
+        thread.start()
+    for thread in ts:
+        thread.join(timeout=NOTIFY_THREAD_TIMEOUT)
+    for thread in ts:
+        if thread.is_alive():
+            print(f"通知渠道 {thread.name} 超时未完成，已放弃等待")
 
 
 def main():

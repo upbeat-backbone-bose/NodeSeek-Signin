@@ -1,3 +1,4 @@
-curl_cffi==0.16.3
-requests>=2.34.2
-tzdata>=2026.5
+curl_cffi==0.17.0
+requests>=2.34.2,<3
+tzdata>=2026.6,<2027
+PyNaCl>=1.6.2,<2

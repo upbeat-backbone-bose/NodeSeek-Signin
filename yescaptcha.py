@@ -1,204 +1,193 @@
-from curl_cffi import requests
 import time
-import os
-from typing import Dict, Optional, Any, Union
+from typing import Optional
+from urllib.parse import urlparse
 
+from curl_cffi import requests
 
-def _get_env_int(name: str, default: int) -> int:
-    """读取环境变量作为整数；若为空或无效则回退 default。"""
-    v = os.getenv(name)
-    if v is None:
-        return default
-    try:
-        return int(str(v).strip())
-    except (ValueError, TypeError):
-        return default
+from config import REQUEST_TIMEOUT
+
 
 class YesCaptchaSolverError(Exception):
     """YesCaptcha 解决器错误基类"""
-    pass
+
+
+class YesCaptchaSolverTimeout(YesCaptchaSolverError):
+    """求解总时限已到。"""
+
+
+class YesCaptchaSolverNetworkError(YesCaptchaSolverError):
+    """验证码服务请求失败（网络/传输层）。"""
+
+
+def _normalize_api_base_url(api_base_url: str) -> str:
+    """Validate and normalize a captcha API base URL."""
+    value = (api_base_url or "").strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise YesCaptchaSolverError("API_BASE_URL 必须是有效的 http(s) URL")
+    return value
+
 
 class YesCaptchaSolver:
     """
     YesCaptcha 验证码解决工具
-    
+
     使用 YesCaptcha API 解决 Turnstile 验证码，获取验证令牌
     参考文档: https://yescaptcha.atlassian.net/wiki/spaces/YESCAPTCHA/overview
     """
-    
+
     def __init__(
-        self, 
+        self,
         api_base_url: str = "https://api.yescaptcha.com",
         client_key: str = "",
         max_retries: int = 20,
         retry_interval: int = 3,
         timeout: int = None,
-        advanced: bool = False
+        advanced: bool = False,
     ):
-        """
-        初始化 YesCaptcha 验证码解决器
-        
-        参数:
-            api_base_url: API 基础 URL，默认为 YesCaptcha 国际节点
-            client_key: API 客户端密钥
-            max_retries: 最大重试次数
-            retry_interval: 重试间隔(秒)
-            timeout: 请求超时时间(秒)
-            advanced: 是否使用高级解析模式(M1)
-        """
-        self.api_base_url = api_base_url
-        self.create_task_url = f"{api_base_url}/createTask"
-        self.get_result_url = f"{api_base_url}/getTaskResult"
+        base_url = _normalize_api_base_url(api_base_url)
+        self.api_base_url = base_url
+        self.create_task_url = f"{base_url}/createTask"
+        self.get_result_url = f"{base_url}/getTaskResult"
         self.client_key = client_key
-        self.max_retries = max_retries
-        self.retry_interval = retry_interval
-        self.timeout = timeout if timeout is not None else _get_env_int("TIMEOUT", 15)
+        self.max_retries = max(1, max_retries)
+        self.retry_interval = max(1, retry_interval)
+        self.timeout = timeout if timeout is not None else REQUEST_TIMEOUT
         self.advanced = advanced
-    
+
     def solve(
         self,
         url: str,
         sitekey: str,
         user_agent: Optional[str] = None,
-        verbose: bool = False
+        verbose: bool = False,
     ) -> str:
-        """
-        解决 Turnstile 验证并返回令牌
-        
-        参数:
-            url: 目标网站 URL
-            sitekey: Turnstile sitekey
-            user_agent: 自定义 User-Agent
-            verbose: 是否打印详细日志
-            
-        返回:
-            验证令牌字符串
-            
-        异常:
-            YesCaptchaSolverError: 解决验证码时出错
-        """
+        """解决 Turnstile 验证并返回令牌"""
         if verbose:
             print("正在创建 YesCaptcha 验证任务...")
-            
+
         task_id = self._create_task(url, sitekey, user_agent, verbose)
         if not task_id:
             raise YesCaptchaSolverError("创建验证码任务失败")
-            
-        # 获取任务结果
+
         token = self._get_task_result(task_id, verbose)
         if not token:
             raise YesCaptchaSolverError("获取验证码结果失败")
-            
+
         if verbose:
-            print(f"验证码解决成功: {token[:30]}...{token[-10:] if len(token) > 30 else ''}")
-            
+            print(f"验证码解决成功，令牌长度: {len(token)}")
         return token
-        
+
     def _create_task(
         self,
         url: str,
         sitekey: str,
         user_agent: Optional[str] = None,
-        verbose: bool = False
+        verbose: bool = False,
     ) -> Optional[str]:
         """创建验证码任务并返回任务ID"""
-        
-        # 准备任务数据 - 严格按照YesCaptcha官方文档格式
-        task_type = "TurnstileTaskProxylessM1" if self.advanced else "TurnstileTaskProxyless"
-        
+        task_type = (
+            "TurnstileTaskProxylessM1"
+            if self.advanced
+            else "TurnstileTaskProxyless"
+        )
         data = {
             "clientKey": self.client_key,
             "task": {
                 "type": task_type,
                 "websiteURL": url,
-                "websiteKey": sitekey
+                "websiteKey": sitekey,
             },
             "softID": "116190",
         }
-        
-        # 如果需要添加用户代理
         if user_agent:
             data["task"]["userAgent"] = user_agent
-            
+
         try:
-            #if verbose:
-            #    print(f"发送创建任务请求: {data}")
-                
             response = requests.post(
-                self.create_task_url, 
+                self.create_task_url,
                 json=data,
                 timeout=self.timeout,
-                impersonate="chrome110"
+                impersonate="chrome110",
             )
+        except Exception as exc:
+            raise YesCaptchaSolverNetworkError(
+                f"创建验证码任务失败: {type(exc).__name__}"
+            ) from exc
+
+        if response.status_code != 200:
+            raise YesCaptchaSolverError(
+                f"创建验证码任务失败: HTTP {response.status_code}"
+            )
+
+        try:
             result = response.json()
-            
-            #if verbose:
-            #    print(f"创建任务响应: {result}")
-                
-            if result.get("errorId") == 0:
-                task_id = result.get("taskId")
-                if verbose:
-                    print(f"成功创建任务，ID: {task_id}")
-                return task_id
-            else:
-                error_desc = result.get('errorDescription', '未知错误')
-                if verbose:
-                    print(f"创建任务失败: {error_desc}")
-                return None
-                
-        except Exception as e:
-            if verbose:
-                print(f"创建任务过程中发生异常: {e}")
-            return None
-    
+        except Exception as exc:
+            raise YesCaptchaSolverError(
+                "创建验证码任务失败: 响应不是合法 JSON"
+            ) from exc
+
+        if result.get("errorId") != 0:
+            description = result.get("errorDescription", "未知错误")
+            raise YesCaptchaSolverError(f"创建验证码任务失败: {description}")
+
+        task_id = result.get("taskId")
+        if not task_id:
+            raise YesCaptchaSolverError("创建验证码任务失败: 未返回 taskId")
+        if verbose:
+            print("成功创建 YesCaptcha 任务")
+        return task_id
+
     def _get_task_result(self, task_id: str, verbose: bool = False) -> Optional[str]:
-        """获取任务结果"""
-        
-        data = {
-            "clientKey": self.client_key,
-            "taskId": task_id
-        }
-        
+        """获取任务结果，遇到终态错误立即退出。"""
+        data = {"clientKey": self.client_key, "taskId": task_id}
+        deadline = time.monotonic() + self.timeout + self.max_retries * self.retry_interval
+
         for attempt in range(1, self.max_retries + 1):
+            if time.monotonic() > deadline:
+                raise YesCaptchaSolverTimeout("获取任务结果达到总时限")
+
+            if verbose:
+                print(f"尝试获取任务结果 ({attempt}/{self.max_retries})...")
+
             try:
-                if verbose:
-                    print(f"尝试获取任务结果 ({attempt}/{self.max_retries})...")
-                    
                 response = requests.post(
                     self.get_result_url,
                     json=data,
                     timeout=self.timeout,
-                    impersonate="chrome110"
+                    impersonate="chrome110",
                 )
+            except Exception as exc:
+                raise YesCaptchaSolverNetworkError(
+                    f"获取验证码结果失败: {type(exc).__name__}"
+                ) from exc
+
+            try:
                 result = response.json()
-                
-                if result.get("errorId") > 0:
-                    error_desc = result.get('errorDescription', '未知错误')
-                    if verbose:
-                        print(f"获取结果失败: {error_desc}")
-                    return None
-                
-                status = result.get("status")
-                
-                # 按照文档，状态为ready时表示已完成
-                if status == "ready":
-                    token = result.get("solution", {}).get("token")
-                    if verbose:
-                        print("任务已完成")
-                    return token
-                
-                # 按照文档，状态为processing时表示处理中，需等待重试
-                elif status == "processing":
-                    if verbose:
-                        print(f"任务处理中，等待 {self.retry_interval} 秒后重试...")
-                    time.sleep(self.retry_interval)
-                    continue
-                    
-            except Exception as e:
+            except Exception as exc:
+                raise YesCaptchaSolverError(
+                    "获取验证码结果失败: 响应不是合法 JSON"
+                ) from exc
+
+            if result.get("errorId", 0) > 0:
+                description = result.get("errorDescription", "未知错误")
+                raise YesCaptchaSolverError(f"获取验证码结果失败: {description}")
+
+            status = str(result.get("status", "")).lower()
+            if status == "ready":
+                token = result.get("solution", {}).get("token")
+                if verbose and token:
+                    print(f"任务已完成，令牌长度: {len(token)}")
+                return token
+
+            if status in ("failed", "error", "invalid"):
+                description = result.get("errorDescription", status)
+                raise YesCaptchaSolverError(f"验证码任务失败: {description}")
+
+            if attempt < self.max_retries:
                 if verbose:
-                    print(f"获取任务结果过程中发生异常: {e}")
-                return None
-                
-        if verbose:
-            print("获取任务结果超时")
-        return None
+                    print(f"任务处理中，等待 {self.retry_interval} 秒后重试...")
+                time.sleep(self.retry_interval)
+                continue
+
+        raise YesCaptchaSolverTimeout("获取验证码结果超时")

@@ -1,13 +1,29 @@
 # -*- coding: utf-8 -*-
 
+import base64
+import json
 import os
-import time
+import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+import requests as py_requests
 from curl_cffi import requests
 from yescaptcha import YesCaptchaSolver, YesCaptchaSolverError
 from turnstile_solver import TurnstileSolver, TurnstileSolverError
+
+from config import DEBUG_MODE, REQUEST_TIMEOUT, get_env_bool, get_env_int, get_env_str
+from cookie_store import (
+    COOKIE_FILE_PATH,
+    CookieFileError,
+    align_cookies,
+    join_cookies,
+    load_cookie_file,
+    save_cookie_file,
+    split_cookies,
+)
 
 
 _print = print
@@ -20,115 +36,69 @@ def _debug_print(*args, **kwargs):
         with _debug_mutex:
             _print("[DEBUG]", *args, **kwargs)
 
-def _get_env_str(name: str, default: str = "") -> str:
-    """读取环境变量并去掉空白；若为空字符串则回退 default。"""
-    v = os.getenv(name)
-    if v is None:
-        return default
-    v = str(v).strip()
-    return v if v else default
-
-
-def _get_env_int(name: str, default: int) -> int:
-    """读取环境变量作为整数；若为空或无效则回退 default。"""
-    v = os.getenv(name)
-    if v is None:
-        return default
-    try:
-        return int(str(v).strip())
-    except (ValueError, TypeError):
-        return default
-
 
 def _mask_string(s: str, show_start: int = 2, show_end: int = 2) -> str:
     """对字符串进行脱敏处理，仅显示首尾字符。"""
-    if not s or len(s) <= show_start + show_end:
-        return "*" * len(s) if s else ""
+    if not s:
+        return ""
+    if len(s) <= show_start + show_end:
+        return "*" * len(s)
     return s[:show_start] + "*" * (len(s) - show_start - show_end) + s[-show_end:]
 
 
-def _get_env_bool(name: str, default: bool = False) -> bool:
-    """读取环境变量作为布尔值；支持 true/false/1/0。"""
-    v = os.getenv(name)
-    if v is None:
-        return default
-    return v.lower() in ("true", "1", "yes")
+# ---------------- impersonate 指纹 ----------------
+DEFAULT_IMPERSONATE = "chrome146"
+# curl_cffi 0.17.0 支持的常用桌面指纹，仅作为 Cloudflare 挑战时的有限回退。
+FALLBACK_IMPERSONATE = [
+    DEFAULT_IMPERSONATE,
+    "chrome142",
+    "chrome136",
+    "safari184",
+    "firefox133",
+]
+
+IMPERSONATE_VERSION = get_env_str("NS_IMPERSONATE", DEFAULT_IMPERSONATE)
+IMPERSONATE_ATTEMPTS = max(1, min(get_env_int("NS_IMPERSONATE_ATTEMPTS", 3), 5))
 
 
-DEBUG_MODE = _get_env_bool("DEBUG", False)
+def _load_supported_impersonates() -> set:
+    """Return the impersonation targets supported by the installed curl_cffi."""
+    try:
+        from curl_cffi.requests import BrowserType
+
+        return {item.value for item in BrowserType}
+    except Exception:
+        return set()
+
+
+SUPPORTED_IMPERSONATE = _load_supported_impersonates()
 
 
 def _get_impersonate_candidates() -> list[str]:
-    """生成 curl_cffi impersonate 版本候选列表。
+    """返回主指纹加上有限数量的备选指纹。
+
+    旧的无限回退会构造 43 个候选，单次签到最坏可产生数小时请求。
+    这里默认最多 3 个，且允许通过 NS_IMPERSONATE_ATTEMPTS 调整（上限 5）。
+    不被当前 curl_cffi 支持的指纹会被剔除，避免配置错误直接让签到失败。
     """
-    primary = _get_env_str("NS_IMPERSONATE", "")
-    defaults = [
-    # Chrome (Desktop)
-    "chrome99",
-    "chrome100",
-    "chrome101",
-    "chrome104",
-    "chrome107",
-    "chrome110",
-    "chrome116",
-    "chrome119",
-    "chrome120",
-    "chrome123",
-    "chrome124",
-    "chrome131",
-    "chrome133a",
-    "chrome136",
-    "chrome142",
-    "chrome145",
-    "chrome146",
-
-    # Chrome (Android)
-    "chrome99_android",
-    "chrome131_android",
-
-    # Edge
-    "edge99",
-    "edge101",
-
-    # Safari
-    "safari153",
-    "safari155",
-    "safari15_3",
-    "safari15_5",
-    "safari170",
-    "safari172_ios",
-    "safari17_0",
-    "safari17_2_ios",
-    "safari180",
-    "safari180_ios",
-    "safari184",
-    "safari184_ios",
-    "safari18_0",
-    "safari18_0_ios",
-    "safari260",
-    "safari2601",
-    "safari260_ios",
-
-    # Firefox
-    "firefox133",
-    "firefox135",
-    "firefox144",
-    "firefox147",
-
-    # Tor
-    "tor145",
-    ]
-
     candidates: list[str] = []
-    for v in ([primary] if primary else []) + defaults:
-        if v and v not in candidates:
-            candidates.append(v)
+    for value in [IMPERSONATE_VERSION] + FALLBACK_IMPERSONATE:
+        if not value:
+            continue
+        if SUPPORTED_IMPERSONATE and value not in SUPPORTED_IMPERSONATE:
+            if value == IMPERSONATE_VERSION:
+                print(f"[WARN] 不支持的 impersonate 指纹: {value}，已回退到默认指纹")
+            continue
+        if value not in candidates:
+            candidates.append(value)
+        if len(candidates) >= IMPERSONATE_ATTEMPTS:
+            break
+    if not candidates:
+        candidates = [DEFAULT_IMPERSONATE]
     return candidates
 
 
-IMPERSONATE_VERSION = _get_env_str("NS_IMPERSONATE", "chrome146")
 IMPERSONATE_CANDIDATES = _get_impersonate_candidates()
-REQUEST_TIMEOUT = _get_env_int("TIMEOUT", 15)
 
 # ---------------- 通知模块动态加载 ----------------
 hadsend = False
@@ -139,347 +109,461 @@ try:
 except ImportError:
     print("未加载通知模块，跳过通知功能")
 
+
 # ---------------- 环境检测函数 ----------------
 def detect_environment():
     """检测当前运行环境"""
-    # 优先检测是否在 Docker 环境中
-    if os.environ.get("IN_DOCKER") == "true":
+    if get_env_bool("IN_DOCKER", False):
         return "docker"
-        
-    # 检测是否在青龙环境中
-    ql_path_markers = ['/ql/data/', '/ql/config/', '/ql/', '/.ql/']
-    in_ql_env = False
-    
-    for path in ql_path_markers:
-        if os.path.exists(path):
-            in_ql_env = True
-            break
-    
-    # 检测是否在GitHub Actions环境中
-    in_github_env = os.environ.get("GITHUB_ACTIONS") == "true" or (os.environ.get("GH_PAT") and os.environ.get("GITHUB_REPOSITORY"))
-    
+
+    ql_path_markers = ["/ql/data/", "/ql/config/", "/ql/", "/.ql/"]
+    in_ql_env = any(os.path.exists(path) for path in ql_path_markers)
+
+    in_github_env = get_env_bool("GITHUB_ACTIONS", False) or bool(
+        get_env_str("GH_PAT") and get_env_str("GITHUB_REPOSITORY")
+    )
+
     if in_ql_env:
         return "qinglong"
-    elif in_github_env:
+    if in_github_env:
         return "github"
-    else:
-        return "unknown"
+    return "unknown"
 
-# ---------------- GitHub 变量写入函数 ----------------
-def save_cookie_to_github_var(var_name: str, cookie: str):
-    import requests as py_requests
-    token = os.environ.get("GH_PAT")
-    repo = os.environ.get("GITHUB_REPOSITORY")
+
+# ---------------- GitHub Secret 写入函数 ----------------
+def save_cookie_to_github_secret(var_name: str, cookie: str) -> bool:
+    """通过 GitHub Secrets API 加密更新 Cookie。
+
+    仅当 GH_COOKIE_WRITEBACK=true 时启用，避免默认把会话凭据写入
+    明文 Actions Variable。需要 GH_PAT 具备目标仓库的 Secrets 写权限。
+
+    返回值语义：
+      True  - 已写入
+      False - 写入失败
+      None  - 未启用回写（属于配置选择，不是失败）
+    """
+    if not get_env_bool("GH_COOKIE_WRITEBACK", False):
+        print("GitHub Cookie 回写未启用（如需回写请设置 GH_COOKIE_WRITEBACK=true）")
+        return None
+
+    token = get_env_str("GH_PAT")
+    repo = get_env_str("GITHUB_REPOSITORY")
     if not token or not repo:
-        print("GH_PAT 或 GITHUB_REPOSITORY 未设置，跳过GitHub变量更新")
+        print("GH_PAT 或 GITHUB_REPOSITORY 未设置，跳过 GitHub Secret 更新")
+        return False
+
+    try:
+        from nacl import encoding, public
+    except ImportError:
+        print("缺少 PyNaCl，无法加密更新 GitHub Secret")
         return False
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    url_check = f"https://api.github.com/repos/{repo}/actions/variables/{var_name}"
-    url_create = f"https://api.github.com/repos/{repo}/actions/variables"
-
-    data = {"name": var_name, "value": cookie}
-
-    response = py_requests.patch(url_check, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
-    if response.status_code == 204:
-        print(f"GitHub: {var_name} 更新成功")
-        return True
-    elif response.status_code == 404:
-        print(f"GitHub: {var_name} 不存在，尝试创建...")
-        response = py_requests.post(url_create, headers=headers, json=data, timeout=REQUEST_TIMEOUT)
-        if response.status_code == 201:
-            print(f"GitHub: {var_name} 创建成功")
-            return True
-        else:
-            print(f"GitHub创建失败: {response.status_code}, {response.text}")
+    try:
+        key_response = py_requests.get(
+            f"https://api.github.com/repos/{repo}/actions/secrets/public-key",
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if key_response.status_code != 200:
+            print(f"GitHub: 获取 Secrets 公钥失败 ({key_response.status_code})")
             return False
-    else:
-        print(f"GitHub设置失败: {response.status_code}, {response.text}")
+        key_data = key_response.json()
+
+        public_key = public.PublicKey(
+            key_data["key"].encode("utf-8"), encoding.Base64Encoder()
+        )
+        sealed_box = public.SealedBox(public_key)
+        encrypted = base64.b64encode(
+            sealed_box.encrypt(cookie.encode("utf-8"))
+        ).decode("utf-8")
+
+        put_response = py_requests.put(
+            f"https://api.github.com/repos/{repo}/actions/secrets/{var_name}",
+            headers=headers,
+            json={"encrypted_value": encrypted, "key_id": key_data["key_id"]},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if put_response.status_code in (201, 204):
+            print(f"GitHub Secret {var_name} 更新成功")
+            return True
+        print(f"GitHub Secret 更新失败 ({put_response.status_code})")
+        return False
+    except Exception as exc:
+        _debug_print(f"GitHub Secret 更新异常: {exc}")
+        print("GitHub Secret 更新异常")
         return False
 
-# ---------------- 青龙面板变量删除函数 ----------------
-def delete_ql_env(var_name: str):
+
+# ---------------- 青龙面板变量操作 ----------------
+def _get_qlapi():
+    """青龙会在任务预加载阶段注入全局 QLAPI；普通 Python 下不存在。"""
+    return globals().get("QLAPI")
+
+
+def delete_ql_env(var_name: str) -> bool:
     """删除青龙面板中的指定环境变量"""
+    qlapi = _get_qlapi()
+    if qlapi is None:
+        print("未检测到青龙 QLAPI，跳过环境变量删除")
+        return False
+
     try:
         print(f"查询要删除的环境变量: {var_name}")
-        env_result = QLAPI.getEnvs({"searchValue": var_name})
-        
+        env_result = qlapi.getEnvs({"searchValue": var_name})
+
         env_ids = []
         if env_result.get("code") == 200 and env_result.get("data"):
             for env in env_result.get("data"):
                 if env.get("name") == var_name:
                     env_ids.append(env.get("id"))
-        
-        if env_ids:
-            print(f"找到 {len(env_ids)} 个环境变量需要删除: {env_ids}")
-            delete_result = QLAPI.deleteEnvs({"ids": env_ids})
-            if delete_result.get("code") == 200:
-                print(f"成功删除环境变量: {var_name}")
-                return True
-            else:
-                print(f"删除环境变量失败: {delete_result}")
-                return False
-        else:
+
+        if not env_ids:
             print(f"未找到环境变量: {var_name}")
             return True
-    except (TurnstileSolverError, YesCaptchaSolverError) as e:
-        _debug_print(f"验证码解析错误: {e}")
-        print(f"验证码解析错误")
-        return None
-    except Exception as e:
-        _debug_print(f"删除环境变量异常: {str(e)}")
-        print(f"删除环境变量异常")
+
+        print(f"找到 {len(env_ids)} 个环境变量需要删除: {env_ids}")
+        delete_result = qlapi.deleteEnvs({"ids": env_ids})
+        if delete_result.get("code") == 200:
+            print(f"成功删除环境变量: {var_name}")
+            return True
+        print("删除环境变量失败")
+        return False
+    except Exception as exc:
+        _debug_print(f"删除环境变量异常: {exc}")
+        print("删除环境变量异常")
         return False
 
-# ---------------- 青龙面板变量更新函数 ----------------
-def save_cookie_to_ql(var_name: str, cookie: str):
-    """保存Cookie到青龙面板环境变量"""
-    
+
+def save_cookie_to_ql(var_name: str, cookie: str) -> bool:
+    """保存 Cookie 到青龙面板环境变量"""
+    qlapi = _get_qlapi()
+    if qlapi is None:
+        print("未检测到青龙 QLAPI，跳过环境变量更新")
+        return False
+
     try:
-        delete_result = delete_ql_env(var_name)
-        if not delete_result:
+        if not delete_ql_env(var_name):
             print("删除已有变量失败，但仍将尝试创建新变量")
-        
-        create_data = {
-            "envs": [
-                {
-                    "name": var_name,
-                    "value": cookie,
-                    "remarks": "NodeSeek签到自动创建",
-                    "status": 2  # 启用状态
-                }
-            ]
-        }
-        
-        create_result = QLAPI.createEnv(create_data)
+
+        create_result = qlapi.createEnv(
+            {
+                "envs": [
+                    {
+                        "name": var_name,
+                        "value": cookie,
+                        "remarks": "NodeSeek签到自动创建",
+                        "status": 2,
+                    }
+                ]
+            }
+        )
         if create_result.get("code") == 200:
             print(f"青龙面板环境变量 {var_name} 创建成功")
             return True
-        else:
-            _debug_print(f"青龙面板环境变量创建失败: {create_result}")
-            print(f"青龙面板环境变量创建失败")
-            return False
-    except Exception as e:
-        _debug_print(f"青龙面板环境变量操作异常: {str(e)}")
-        print(f"青龙面板环境变量操作异常")
+        _debug_print(f"青龙面板环境变量创建失败: {create_result}")
+        print("青龙面板环境变量创建失败")
         return False
+    except Exception as exc:
+        _debug_print(f"青龙面板环境变量操作异常: {exc}")
+        print("青龙面板环境变量操作异常")
+        return False
+
 
 # ---------------- Docker Cookie 文件保存 ----------------
-COOKIE_FILE_PATH = "./cookie/NS_COOKIE.txt"
-
-def save_cookie_to_file(cookie_str: str):
-    """将Cookie保存到文件"""
+def save_cookie_to_file(cookie_str: str) -> bool:
+    """将 Cookie 列表原子写入私有文件（保留空账号位置）。"""
     try:
-        os.makedirs(os.path.dirname(COOKIE_FILE_PATH), exist_ok=True)
-        with open(COOKIE_FILE_PATH, "w") as f:
-            f.write(cookie_str)
-        print(f"Cookie 已成功保存到文件: {COOKIE_FILE_PATH}")
-        return True
-    except Exception as e:
-        _debug_print(f"保存Cookie到文件失败: {str(e)}")
-        print(f"保存Cookie到文件失败")
+        if save_cookie_file(cookie_str, COOKIE_FILE_PATH):
+            print(f"Cookie 已成功保存到文件: {COOKIE_FILE_PATH}")
+            return True
         return False
+    except Exception as exc:
+        _debug_print(f"保存Cookie到文件失败: {exc}")
+        print("保存Cookie到文件失败")
+        return False
+
 
 # ---------------- 统一变量保存函数 ----------------
 def save_cookie(var_name: str, cookie: str):
-    """根据当前环境保存Cookie到相应位置"""
+    """根据当前环境保存 Cookie 到相应位置。
+
+    返回值语义：
+      True  - 已保存
+      False - 保存失败
+      None  - 未执行保存（未启用回写 / 环境不支持），属于配置选择而非失败
+    """
     env_type = detect_environment()
-    
+
     if env_type == "docker":
-        print("检测到Docker环境，保存Cookie到文件...")
+        print("检测到 Docker 环境，保存 Cookie 到文件...")
         return save_cookie_to_file(cookie)
-    elif env_type == "qinglong":
+    if env_type == "qinglong":
         print("检测到青龙环境，保存变量到青龙面板...")
         return save_cookie_to_ql(var_name, cookie)
-    elif env_type == "github":
-        print("检测到GitHub环境，保存变量到GitHub Actions...")
-        return save_cookie_to_github_var(var_name, cookie)
-    else:
-        print("未检测到支持的环境，跳过变量保存")
-        return False
+    if env_type == "github":
+        print("检测到 GitHub 环境，保存加密 Secret...")
+        return save_cookie_to_github_secret(var_name, cookie)
+
+    print("未检测到支持的环境，跳过变量保存")
+    return None
+
 
 # ---------------- 登录逻辑 ----------------
 def session_login(user, password, solver_type, api_base_url, client_key):
+    if not client_key:
+        print("未配置 CLIENT_KEY，跳过验证码求解和登录")
+        return None
+
     try:
         if solver_type.lower() == "yescaptcha":
             print("正在使用 YesCaptcha 解决验证码...")
             solver = YesCaptchaSolver(
                 api_base_url=api_base_url or "https://api.yescaptcha.com",
-                client_key=client_key
+                client_key=client_key,
             )
         else:  # 默认使用 turnstile_solver
             print("正在使用 TurnstileSolver 解决验证码...")
             solver = TurnstileSolver(
                 api_base_url=api_base_url,
-                client_key=client_key
+                client_key=client_key,
             )
 
         token = solver.solve(
             url="https://www.nodeseek.com/signIn.html",
             sitekey="0x4AAAAAAAaNy7leGjewpVyR",
-            verbose=True
+            verbose=DEBUG_MODE,
         )
         if not token:
             print("验证码解析失败")
             return None
-    except Exception as e:
-        _debug_print(f"验证码错误: {e}")
-        print(f"验证码错误")
+    except (TurnstileSolverError, YesCaptchaSolverError) as exc:
+        # 求解器已经把真实原因（密钥无效、余额不足、超时、请求失败）写进异常，
+        # 这里必须透出，否则用户只能看到一句无信息量的"验证码错误"。
+        print(f"验证码错误: {exc}")
+        return None
+    except Exception as exc:
+        _debug_print(f"验证码异常: {exc}")
+        print("验证码异常")
         return None
 
-    # 优先使用环境变量指定的 IMPERSONATE_VERSION（若未设置则使用默认值），作为首次尝试的指纹
-    initial_impersonate = IMPERSONATE_VERSION
-    session = requests.Session(impersonate=initial_impersonate)
-    print(f"[INFO] 使用初始 impersonate: {initial_impersonate}")
-    session.get("https://www.nodeseek.com/signIn.html")
+    login_impersonate = (
+        IMPERSONATE_CANDIDATES[0] if IMPERSONATE_CANDIDATES else DEFAULT_IMPERSONATE
+    )
+    print(f"[INFO] 使用 impersonate: {login_impersonate}")
 
     data = {
         "username": user,
         "password": password,
         "token": token,
-        "source": "turnstile"
+        "source": "turnstile",
     }
     headers = {
-        'origin': "https://www.nodeseek.com",
-        'referer': "https://www.nodeseek.com/signIn.html",
-        'accept-language': "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        'Content-Type': "application/json"
+        "origin": "https://www.nodeseek.com",
+        "referer": "https://www.nodeseek.com/signIn.html",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "Content-Type": "application/json",
     }
+
     try:
-        response = session.post("https://www.nodeseek.com/api/account/signIn", json=data, headers=headers, timeout=REQUEST_TIMEOUT)
-        resp_json = response.json()
-        if resp_json.get("success"):
-            cookies = session.cookies.get_dict()
-            cookie_string = '; '.join([f"{k}={v}" for k, v in cookies.items()])
-            return cookie_string
-        else:
-            _debug_print(f"登录失败: {resp_json.get('message')}")
-            print("登录失败: 认证失败")
-            return None
-    except Exception as e:
-        _debug_print(f"登录异常: {e}")
+        with requests.Session(impersonate=login_impersonate) as session:
+            session.get(
+                "https://www.nodeseek.com/signIn.html", timeout=REQUEST_TIMEOUT
+            )
+            response = session.post(
+                "https://www.nodeseek.com/api/account/signIn",
+                json=data,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            resp_json = response.json()
+            if resp_json.get("success"):
+                cookies = session.cookies.get_dict()
+                cookie_string = "; ".join(f"{k}={v}" for k, v in cookies.items())
+                if not cookie_string:
+                    print("登录成功但未获得 Cookie")
+                    return None
+                return cookie_string
+
+        _debug_print(f"登录失败: {resp_json.get('message')}")
+        print("登录失败: 认证失败")
+        return None
+    except Exception as exc:
+        _debug_print(f"登录异常: {exc}")
         print("登录异常: 请求出错")
         return None
+
 
 # ---------------- 签到逻辑 ----------------
 def _is_cloudflare_challenge(text: str) -> bool:
     if not text:
         return False
-    t = text.lower()
-    # 常见挑战页特征
-    return ("just a moment" in t) or ("cf-chl" in t) or ("challenge" in t and "cloudflare" in t)
+    lowered = text.lower()
+    return (
+        "just a moment" in lowered
+        or "cf-chl" in lowered
+        or ("challenge" in lowered and "cloudflare" in lowered)
+    )
 
-def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, json_data=None, timeout: int = REQUEST_TIMEOUT):
+
+def _request_with_impersonate_fallback(
+    method: str,
+    url: str,
+    *,
+    headers: dict,
+    json_data=None,
+    timeout: int = None,
+):
+    """发送请求，只为明确的 Cloudflare 挑战切换有限的备用指纹。
+
+    传输层异常（超时、DNS、连接重置）不会重试，因为签到 POST 不是
+    幂等操作，盲目重试可能造成重复签到或放大请求。
+    """
+    timeout = timeout or REQUEST_TIMEOUT
+    candidates = _get_impersonate_candidates()
+    deadline = time.monotonic() + timeout * max(1, len(candidates))
     last_resp = None
     last_err = None
-    # 优先尝试 IMPERSONATE_VERSION，然后尝试 IMPERSONATE_CANDIDATES（去重）
-    ordered_candidates = [IMPERSONATE_VERSION] + [v for v in IMPERSONATE_CANDIDATES if v != IMPERSONATE_VERSION]
-    for ver in ordered_candidates:
+    # 记录最后一次实际发出的请求所用的指纹，供错误消息排障使用。
+    used = IMPERSONATE_VERSION
+
+    for version in candidates:
+        if time.monotonic() >= deadline:
+            last_err = TimeoutError("请求总时限已到")
+            break
         try:
-            resp = requests.request(method, url, headers=headers, json=json_data, impersonate=ver, timeout=timeout)
-            last_resp = resp
-            if resp.status_code != 403:
-                return resp, ver, None
-            # 403：如果是 Cloudflare 挑战页特征，则尝试下一个指纹版本继续重试
-            if _is_cloudflare_challenge(resp.text):
-                print(f"[WARN] 403 Cloudflare challenge (impersonate={ver})，尝试切换指纹...")
-                continue
-            # 非挑战页 403，直接返回响应
-            return resp, ver, None
-        except Exception as e:
-            last_err = e
-            _debug_print(f"[WARN] 请求异常 (impersonate={ver}): {e}")
-            print(f"[WARN] 请求异常 (impersonate={ver})")
-            continue
-    # 所有候选都试过后返回最后一次响应或错误，并把最后尝试的指纹返回给调用方
-    return last_resp, (ordered_candidates[-1] if ordered_candidates else IMPERSONATE_VERSION), last_err
+            resp = requests.request(
+                method,
+                url,
+                headers=headers,
+                json=json_data,
+                impersonate=version,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            last_err = exc
+            used = version
+            _debug_print(f"[WARN] 请求异常 (impersonate={version}): {exc}")
+            print(f"[WARN] 请求异常 (impersonate={version})，不再重试")
+            break
+
+        last_resp = resp
+        used = version
+        if resp.status_code not in (403, 503) or not _is_cloudflare_challenge(resp.text):
+            return resp, version, None
+
+        print(f"[WARN] Cloudflare challenge (impersonate={version})，尝试下一个指纹...")
+
+    return last_resp, used, last_err
+
 
 def sign(ns_cookie, ns_random):
     if not ns_cookie:
         return "invalid", "无有效Cookie"
-        
+
     headers = {
-        'origin': "https://www.nodeseek.com",
-        'referer': "https://www.nodeseek.com/board",
-        'Content-Type': 'application/json',
-        'Cookie': ns_cookie
+        "origin": "https://www.nodeseek.com",
+        "referer": "https://www.nodeseek.com/board",
+        "Content-Type": "application/json",
+        "Cookie": ns_cookie,
     }
     try:
         url = f"https://www.nodeseek.com/api/attendance?random={ns_random}"
         response, used_impersonate, req_err = _request_with_impersonate_fallback(
-            "POST", url, headers=headers, json_data={}, timeout=25
+            "POST", url, headers=headers, json_data={}, timeout=REQUEST_TIMEOUT
         )
         if req_err is not None:
-            return "error", f"请求异常: {req_err}"
+            return "error", "请求异常"
         if response is None:
             return "error", "请求失败：无响应"
         if response.status_code == 403:
-            # 仍然被拦截
             if _is_cloudflare_challenge(response.text):
-                return "forbidden", f"403 Cloudflare challenge (最后尝试 impersonate={used_impersonate})"
+                return "forbidden", f"403 Cloudflare challenge (impersonate={used_impersonate})"
             return "forbidden", f"403 Forbidden (impersonate={used_impersonate})"
+        if response.status_code == 429:
+            return "error", "请求过于频繁 (429)"
+        if response.status_code >= 500:
+            return "error", f"服务端错误 ({response.status_code})"
+
         data = response.json()
         msg = data.get("message", "")
-        if "鸡腿" in msg or data.get("success"):
+        # 判定顺序很重要：先看消息里的明确信号，最后才回退到通用的 success 标志。
+        #   - "鸡腿"：本次确实拿到了奖励，属于新签到。
+        #   - "已完成签到"：今日已签，需要单独计数。若接口同时返回 success=true，
+        #     先前的顺序会让 "already" 永远不会被统计。
+        #   - 404 / "请先登录" / "未登录"：会话已失效，必须触发重新登录，
+        #     且要优先于 success 标志，否则失效的 Cookie 永远不会被刷新。
+        if "鸡腿" in msg:
             return "success", msg
-        elif "已完成签到" in msg:
+        if "已完成签到" in msg:
             return "already", msg
-        elif data.get("status") == 404:
+        if data.get("status") == 404 or "请先登录" in msg or "未登录" in msg:
             return "invalid", msg
+        if data.get("success"):
+            return "success", msg
         return "fail", msg
-    except Exception as e:
-        _debug_print(f"签到请求异常: {e}")
-        return "error", str(e)
+    except Exception as exc:
+        _debug_print(f"签到请求异常: {exc}")
+        return "error", "签到请求异常"
+
 
 # ---------------- 查询签到收益统计函数 ----------------
+# 默认 20 页，与历史行为一致，确保 30 天窗口不被静默截断。
+# 若要减少请求数可显式调低，但结果会标记为"数据不完整"。
+STATS_MAX_PAGES = max(1, min(get_env_int("STATS_MAX_PAGES", 20), 20))
+
+
 def get_signin_stats(ns_cookie, days=30):
-    """查询前days天内的签到收益统计"""
+    """查询前 days 天内的签到收益统计"""
     if not ns_cookie:
         return None, "无有效Cookie"
-    
+
     if days <= 0:
         days = 1
-    
+
     headers = {
-        'origin': "https://www.nodeseek.com",
-        'referer': "https://www.nodeseek.com/board",
-        'Cookie': ns_cookie
+        "origin": "https://www.nodeseek.com",
+        "referer": "https://www.nodeseek.com/board",
+        "Cookie": ns_cookie,
     }
-    
+
     try:
-        # 使用UTC+8时区（上海时区）
         shanghai_tz = ZoneInfo("Asia/Shanghai")
         now_shanghai = datetime.now(shanghai_tz)
-        
-        # 计算查询开始时间：今天0点减去指定天数
-        # 使用 today_start 而非 now_shanghai，确保窗口边界固定在日期边界
-        # 避免因脚本运行时间不同导致同一条记录被排除在外
         today_start = datetime(
-            now_shanghai.year, now_shanghai.month, now_shanghai.day,
-            tzinfo=shanghai_tz
+            now_shanghai.year,
+            now_shanghai.month,
+            now_shanghai.day,
+            tzinfo=shanghai_tz,
         )
         query_start_time = today_start - timedelta(days=days)
-        
-        # 获取多页数据以确保覆盖指定天数内的所有数据
+
         all_records = []
         page = 1
-        
-        while page <= 20:  # 最多查询20页，防止无限循环
+        truncated = False
+        deadline = time.monotonic() + max(60, REQUEST_TIMEOUT * 4)
+
+        while page <= STATS_MAX_PAGES:
+            if time.monotonic() > deadline:
+                _debug_print("统计查询达到总时限，返回已获取的部分数据")
+                truncated = True
+                break
+
             url = f"https://www.nodeseek.com/api/account/credit/page-{page}"
-            response, used_impersonate, req_err = _request_with_impersonate_fallback(
-                "GET", url, headers=headers, json_data=None, timeout=25
+            response, _used, req_err = _request_with_impersonate_fallback(
+                "GET", url, headers=headers, json_data=None, timeout=REQUEST_TIMEOUT
             )
             if req_err is not None:
-                return None, f"请求异常: {req_err}"
+                return None, "请求异常"
             if response is None:
                 return None, "请求失败：无响应"
 
             data = response.json()
-
             if not data.get("success") or not data.get("data"):
                 break
 
@@ -487,239 +571,345 @@ def get_signin_stats(ns_cookie, days=30):
             if not records:
                 break
 
-            # 检查最后一条记录的时间，如果超出查询范围就停止
             last_record_time = datetime.fromisoformat(
-                records[-1][3].replace('Z', '+00:00'))
-            last_record_time_shanghai = last_record_time.astimezone(shanghai_tz)
-            if last_record_time_shanghai < query_start_time:
-                # 只添加在查询范围内的记录
+                records[-1][3].replace("Z", "+00:00")
+            ).astimezone(shanghai_tz)
+            if last_record_time < query_start_time:
                 for record in records:
                     record_time = datetime.fromisoformat(
-                        record[3].replace('Z', '+00:00'))
-                    record_time_shanghai = record_time.astimezone(shanghai_tz)
-                    if record_time_shanghai >= query_start_time:
+                        record[3].replace("Z", "+00:00")
+                    ).astimezone(shanghai_tz)
+                    if record_time >= query_start_time:
                         all_records.append(record)
                 break
-            else:
-                all_records.extend(records)
 
+            all_records.extend(records)
             page += 1
             time.sleep(0.5)
-        
-        # 筛选指定天数内的签到收益记录
+        else:
+            # 页数用尽仍未触及时间窗口下界，说明数据被截断。
+            truncated = True
+
         signin_records = []
         for record in all_records:
-            amount, balance, description, timestamp = record
+            amount, _balance, description, timestamp = record
             record_time = datetime.fromisoformat(
-                timestamp.replace('Z', '+00:00'))
-            record_time_shanghai = record_time.astimezone(shanghai_tz)
+                timestamp.replace("Z", "+00:00")
+            ).astimezone(shanghai_tz)
 
-            # 只统计指定天数内的签到收益
-            if (record_time_shanghai >= query_start_time and
-                    "签到收益" in description and "鸡腿" in description):
-                signin_records.append({
-                    'amount': amount,
-                    'date': record_time_shanghai.strftime('%Y-%m-%d'),
-                    'description': description
-                })
+            if (
+                record_time >= query_start_time
+                and "签到收益" in description
+                and "鸡腿" in description
+            ):
+                signin_records.append(
+                    {
+                        "amount": amount,
+                        "date": record_time.strftime("%Y-%m-%d"),
+                        "description": description,
+                    }
+                )
 
-        # 生成时间范围描述
         period_desc = f"近{days}天"
         if days == 1:
             period_desc = "今天"
-        
+        if truncated:
+            # 数据不完整时必须显式说明，避免把部分数据当作完整 30 天窗口。
+            period_desc = f"{period_desc}(数据不完整)"
+
         if not signin_records:
             return {
-                'total_amount': 0,
-                'average': 0,
-                'days_count': 0,
-                'records': [],
-                'period': period_desc,
+                "total_amount": 0,
+                "average": 0,
+                "days_count": 0,
+                "records": [],
+                "period": period_desc,
+                "truncated": truncated,
             }, f"查询成功，但没有找到{period_desc}的签到记录"
-        
-        # 统计数据
-        total_amount = sum(record['amount'] for record in signin_records)
+
+        total_amount = sum(record["amount"] for record in signin_records)
         days_count = len(signin_records)
         average = round(total_amount / days_count, 2) if days_count > 0 else 0
-        
+
         stats = {
-            'total_amount': total_amount,
-            'average': average,
-            'days_count': days_count,
-            'records': signin_records,
-            'period': period_desc
+            "total_amount": total_amount,
+            "average": average,
+            "days_count": days_count,
+            "records": signin_records,
+            "period": period_desc,
+            "truncated": truncated,
         }
-        
         return stats, "查询成功"
-        
-    except Exception as e:
-        _debug_print(f"查询签到统计异常: {e}")
-        return None, f"查询异常: {str(e)}"
+
+    except Exception as exc:
+        _debug_print(f"查询签到统计异常: {exc}")
+        return None, "查询签到统计异常"
+
 
 # ---------------- 显示签到统计信息 ----------------
 def print_signin_stats(stats, account_name):
     """打印签到统计信息"""
     if not stats:
         return
-        
+
     print(f"\n==== {account_name} 签到收益统计 ({stats['period']}) ====")
     print(f"签到天数: {stats['days_count']} 天")
     print(f"总获得鸡腿: {stats['total_amount']} 个")
     print(f"平均每日鸡腿: {stats['average']} 个")
 
 
-# ---------------- 主流程 ----------------
-if __name__ == "__main__":
-    solver_type = os.getenv("SOLVER_TYPE", "turnstile")
-    api_base_url = os.getenv("API_BASE_URL", "")
-    client_key = os.getenv("CLIENT_KEY", "") 
-    ns_random = os.getenv("NS_RANDOM", "false")
+def _load_accounts():
+    """按固定顺序加载账号配置。
 
-    env_type = detect_environment()
-    print(f"当前运行环境: {env_type}")
-    
+    账号顺序即 Cookie 槽位顺序（位置即身份）：
+
+    ==========  ==========================================
+    账号序号    对应环境变量
+    ==========  ==========================================
+    第 1 个     ``USER`` / ``PASS``
+    第 2 个     ``USER1`` / ``PASS1``
+    第 3 个     ``USER2`` / ``PASS2``
+    ...         ...
+    ==========  ==========================================
+
+    ``USER1`` 起必须连续（遇到第一个缺失的序号即停止），
+    这样才能保证 Cookie 槽位与账号一一对应。
+    """
     accounts = []
 
-    # 先收集账号密码配置
-    user = os.getenv("USER")
-    password = os.getenv("PASS")
+    user = get_env_str("USER")
+    password = get_env_str("PASS")
     if user and password:
         accounts.append({"user": user, "password": password})
 
     index = 1
     while True:
-        user = os.getenv(f"USER{index}")
-        password = os.getenv(f"PASS{index}")
-        if user and password:
-            accounts.append({"user": user, "password": password})
-            index += 1
-        else:
+        user = get_env_str(f"USER{index}")
+        password = get_env_str(f"PASS{index}")
+        if not (user and password):
             break
-    
-    # 读取现有Cookie
-    all_cookies = ""
-    if detect_environment() == "docker":
-        print(f"Docker环境，尝试从 {COOKIE_FILE_PATH} 读取Cookie...")
-        if os.path.exists(COOKIE_FILE_PATH):
-            try:
-                with open(COOKIE_FILE_PATH, "r") as f:
-                    all_cookies = f.read().strip()
-                print("成功从文件加载Cookie。")
-            except Exception as e:
-                print(f"从文件读取Cookie失败")
+        accounts.append({"user": user, "password": password})
+        index += 1
+
+    return accounts
+
+
+def _load_cookies(env_type: str) -> str:
+    if env_type == "docker":
+        print(f"Docker 环境，尝试从 {COOKIE_FILE_PATH} 读取 Cookie...")
+        try:
+            raw = load_cookie_file(COOKIE_FILE_PATH)
+        except CookieFileError as exc:
+            # 单个 Cookie 源不可读不应中断整个签到流程：按空 Cookie 处理。
+            print(f"读取 Cookie 文件失败: {exc}")
+            print("将使用空 Cookie，必要时可通过账号密码重新登录。")
+            return ""
+        if raw:
+            print("成功从文件加载 Cookie。")
         else:
-            print("Cookie文件不存在，将使用空Cookie。")
-    else:
-        all_cookies = os.getenv("NS_COOKIE", "")
-        
-    cookie_list = all_cookies.split("&")
-    cookie_list = [c.strip() for c in cookie_list if c.strip()]
-    
-    print(f"共发现 {len(accounts)} 个账户配置，{len(cookie_list)} 个现有Cookie")
-    
-    if len(accounts) == 0 and len(cookie_list) > 0:
-        for i in range(len(cookie_list)):
-            accounts.append({"user": "", "password": ""})
-    
+            print("Cookie 文件不存在或为空，将使用空 Cookie。")
+        return raw
+    return get_env_str("NS_COOKIE", "")
+
+
+def _stats_message(stats):
+    if not stats:
+        return ""
+    return (
+        f"{stats['period']}已签到{stats['days_count']}天，"
+        f"共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
+    )
+
+
+def run() -> int:
+    solver_type = get_env_str("SOLVER_TYPE", "turnstile")
+    api_base_url = get_env_str("API_BASE_URL", "")
+    client_key = get_env_str("CLIENT_KEY", "")
+    ns_random = get_env_str("NS_RANDOM", "false")
+
+    env_type = detect_environment()
+    print(f"当前运行环境: {env_type}")
+
+    accounts = _load_accounts()
+    cookie_list = split_cookies(_load_cookies(env_type))
+
+    print(f"共发现 {len(accounts)} 个账户配置，{len(cookie_list)} 个现有 Cookie")
+
+    # 账号与 Cookie 按下标一一对应。数量不一致意味着可能存在错位
+    # （例如模板里多填了一个 USER/PASS，导致后面所有账号整体后移一位），
+    # 这里显式告警而不是让用户从"签到到了别人账号"的现象去反推。
+    if accounts and cookie_list and len(accounts) != len(cookie_list):
+        print(
+            "[警告] 账号数量与 Cookie 数量不一致，可能存在槽位错位："
+            f"{len(accounts)} 个账号 vs {len(cookie_list)} 个 Cookie。"
+            "请确认 USER/PASS 对应第 1 个账号、USER1/PASS1 对应第 2 个，"
+            "以此类推。"
+        )
+    # 账号数多于 Cookie 数时，多出来的账号没有对应的 Cookie 槽位，其身份
+    # 不可信（例如模板里多填了一个 USER/PASS，导致后面所有账号整体后移一位）。
+    # 这类账号若贸然重新登录，会为错误账号购买验证码，故直接计为失败。
+    # Cookie 数多于账号数属于"尾部账号没有配置凭据"，下标映射仍然成立，
+    # 保持原有行为。
+    slot_misaligned = (
+        bool(accounts) and bool(cookie_list) and len(accounts) > len(cookie_list)
+    )
+
+    if not accounts and not cookie_list:
+        print("未配置任何账号或 Cookie，退出")
+        return 1
+
     max_count = max(len(accounts), len(cookie_list))
-    
     while len(accounts) < max_count:
         accounts.append({"user": "", "password": ""})
-    
-    while len(cookie_list) < max_count:
-        cookie_list.append("")
-    
+    cookie_list = align_cookies(cookie_list, max_count)
+
+    max_logins = max(0, get_env_int("MAX_LOGIN_ATTEMPTS", max_count))
+    login_attempts = 0
     cookies_updated = False
-    
+    results = []
+    summary_lines = []
+
     for i in range(max_count):
         account_index = i + 1
         account = accounts[i]
         user = account["user"]
         password = account["password"]
-        cookie = cookie_list[i] if i < len(cookie_list) else ""
-        
+        cookie = cookie_list[i]
+
         display_user = user if user else f"账号{account_index}"
         masked_user = _mask_string(display_user, 2, 1) if user else display_user
-        
+
         print(f"\n==== 账号 {masked_user} 开始签到 ====")
-        
+        started = time.monotonic()
+
+        misaligned_slot = False
         if cookie:
             result, msg = sign(cookie, ns_random)
+        elif slot_misaligned:
+            # 账号数多于 Cookie 数时，多出来的账号没有对应的 Cookie 槽位，
+            # 它的身份不可信：为它购买验证码既可能花错钱，也可能登录到别人账号。
+            result, msg = "fail", "槽位错位，跳过重新登录以避免不必要的验证码消耗"
+            misaligned_slot = True
         else:
             result, msg = "invalid", "无Cookie"
 
-        if result in ["success", "already"]:
+        stats = None
+        if result in ("success", "already"):
             _debug_print(f"签到结果: {msg}")
             print(f"账号 {masked_user} 签到成功")
-            
+
             print("正在查询签到收益统计...")
             stats, stats_msg = get_signin_stats(cookie, 30)
             if stats:
                 print_signin_stats(stats, masked_user)
             else:
                 _debug_print(f"统计查询失败: {stats_msg}")
-                print(f"统计查询失败")
-            
-            if hadsend:
-                try:
-                    notification_msg = f"账号 {masked_user} 签到成功"
-                    if stats:
-                        notification_msg += f"\n{stats['period']}已签到{stats['days_count']}天，共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
-                    send("NodeSeek 签到", notification_msg)
-                except Exception:
-                    print(f"发送通知失败")
+                print("统计查询失败")
         else:
-            _debug_print(f"签到失败或Cookie无效: {msg}")
-            print(f"签到失败或Cookie无效")
-            
-            if user and password:
-                print("尝试重新登录获取新Cookie...")
-                new_cookie = session_login(user, password, solver_type, api_base_url, client_key)
-                if new_cookie:
-                    print("登录成功，使用新Cookie重新签到...")
+            _debug_print(f"签到失败或 Cookie 无效: {msg}")
+            print("签到失败或 Cookie 无效")
+
+            # 只有明确的 Cookie 失效才重新登录并购买验证码。
+            # 网络错误、Cloudflare 403、服务端 5xx 不应触发付费求解。
+            if misaligned_slot:
+                print("槽位错位，跳过重新登录以避免不必要的验证码消耗")
+            elif result != "invalid":
+                print("非 Cookie 失效问题，跳过重新登录以避免不必要的验证码消耗")
+            elif not (user and password):
+                print(f"账号 {masked_user} 无法重新登录: 未配置用户名或密码")
+            elif login_attempts >= max_logins:
+                print("本次运行已达到最大登录尝试次数，跳过重新登录")
+            elif not client_key:
+                print("未配置 CLIENT_KEY，无法重新登录")
+            else:
+                print("尝试重新登录获取新 Cookie...")
+                login_attempts += 1
+                new_cookie = session_login(
+                    user, password, solver_type, api_base_url, client_key
+                )
+                if not new_cookie:
+                    print(f"账号 {masked_user} 登录失败，无法获取新 Cookie")
+                else:
+                    print("登录成功，使用新 Cookie 重新签到...")
                     result, msg = sign(new_cookie, ns_random)
-                    if result in ["success", "already"]:
+                    if result in ("success", "already"):
                         _debug_print(f"签到结果: {msg}")
                         print(f"账号 {masked_user} 签到成功")
+                        cookie_list[i] = new_cookie
                         cookies_updated = True
-                        
+
                         print("正在查询签到收益统计...")
                         stats, stats_msg = get_signin_stats(new_cookie, 30)
                         if stats:
                             print_signin_stats(stats, masked_user)
                         else:
                             _debug_print(f"统计查询失败: {stats_msg}")
-                            print(f"统计查询失败")
-                        
-                        cookie_list[i] = new_cookie
-                        
-                        if hadsend:
-                            try:
-                                notification_msg = f"账号 {masked_user} 签到成功"
-                                if stats:
-                                    notification_msg += f"\n{stats['period']}已签到{stats['days_count']}天，共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
-                                send("NodeSeek 签到", notification_msg)
-                            except Exception:
-                                print(f"发送通知失败")
+                            print("统计查询失败")
+
+                        # 立即持久化，避免进程中途退出丢失新 Cookie。
+                        save_cookie("NS_COOKIE", join_cookies(cookie_list))
                     else:
                         _debug_print(f"重新签到失败: {msg}")
                         print(f"账号 {masked_user} 重新签到仍然失败")
-                else:
-                    print(f"账号 {masked_user} 登录失败，无法获取新Cookie")
-                    if hadsend:
-                        try:
-                            send("NodeSeek 登录失败", f"账号 {masked_user} 登录失败")
-                        except Exception:
-                            print(f"发送通知失败")
-            else:
-                print(f"账号 {masked_user} 无法重新登录: 未配置用户名或密码")
-    
-    if cookies_updated and cookie_list:
-        print("\n==== 处理完毕，保存更新后的Cookie ====")
-        all_cookies_new = "&".join([c for c in cookie_list if c.strip()])
-        try:
-            save_cookie("NS_COOKIE", all_cookies_new)
-            print("所有Cookie已成功保存")
-        except Exception as e:
-            print(f"保存Cookie变量异常")
 
+        elapsed = round(time.monotonic() - started, 1)
+        success = result in ("success", "already")
+        results.append(
+            {
+                "account": masked_user,
+                "status": result,
+                "elapsed_seconds": elapsed,
+            }
+        )
+
+        line = f"账号 {masked_user}: {'✅' if success else '❌'} {result}"
+        if stats:
+            line += f"（{_stats_message(stats)}）"
+        summary_lines.append(line)
+        print(f"账号 {masked_user} 完成，耗时 {elapsed}s")
+
+    if cookies_updated and cookie_list:
+        print("\n==== 处理完毕，保存更新后的 Cookie ====")
+        save_result = save_cookie("NS_COOKIE", join_cookies(cookie_list))
+        if save_result is True:
+            print("所有 Cookie 已成功保存")
+        elif save_result is None:
+            print("已跳过保存 Cookie（当前环境未启用对应存储）")
+        else:
+            print("保存 Cookie 失败，请检查运行环境和配置")
+
+    succeeded_count = sum(1 for item in results if item["status"] == "success")
+    already_count = sum(1 for item in results if item["status"] == "already")
+    failed_count = len(results) - succeeded_count - already_count
+
+    # 与 Cloudflare Worker 的聚合结构保持一致：
+    # succeeded / already / failed 互斥，success 为布尔值表示是否全部成功。
+    summary = {
+        "total": len(results),
+        "success": failed_count == 0 and len(results) > 0,
+        "succeeded": succeeded_count,
+        "already": already_count,
+        "failed": failed_count,
+        "results": results,
+    }
+    print("RESULT " + json.dumps(summary, ensure_ascii=False))
+
+    if hadsend and send is not None:
+        try:
+            notification = "\n".join(summary_lines)
+            if failed_count:
+                notification += f"\n\n失败账号数: {failed_count}"
+            send("NodeSeek 签到", notification)
+        except Exception:
+            print("发送通知失败")
+
+    return 0 if failed_count == 0 else 1
+
+
+# ---------------- 主流程 ----------------
+if __name__ == "__main__":
+    try:
+        sys.exit(run())
+    except KeyboardInterrupt:
+        print("用户中断")
+        sys.exit(130)

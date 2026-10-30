@@ -4,6 +4,8 @@ services:
     image: nodeseek-signin:latest
     container_name: nodeseek-signin
     command: ["python", "scheduler.py"]
+    init: true
+    user: "1000:1000"
     environment:
       - IN_DOCKER=true
     env_file:
@@ -11,3 +13,11 @@ services:
     volumes:
       - ./cookie:/app/cookie
     restart: always
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
