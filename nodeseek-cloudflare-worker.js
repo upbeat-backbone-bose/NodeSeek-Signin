@@ -2,13 +2,21 @@
 // 使用 2captcha 解决 Turnstile 验证码
 //
 // 环境变量配置：
-// user: 用户名，多个账户用&分割，如：user1&user2
-// pass: 密码，多个密码用&分割，如：pass1&pass2（与user一一对应）
-// CAPTCHA_API_KEY: 2captcha API密钥 (必填)
-// CAPTCHA_API_URL: 2captcha API地址 (可选，默认 https://api.2captcha.com)
-// NS_COOKIE: 已有的Cookie，多个用&分割（可选，如果提供则跳过登录）
+// user: 用户名，多个账户用 & 分割，如：user1&user2
+// pass: 密码，多个密码用 & 分割，如：pass1&pass2（与 user 一一对应）
+// CAPTCHA_API_KEY: 2captcha API 密钥（仅在账号没有可用 Cookie 或 Cookie 明确失效、需要重新登录时才要求配置）
+// CAPTCHA_API_URL: 2captcha API 地址（可选，默认 https://api.2captcha.com）
+// NS_COOKIE: 已有 Cookie，多个用 & 分割（可选）
+// TRIGGER_TOKEN: 手动触发 /checkin 的 Bearer Token（必填，否则 HTTP 触发返回 503）
+// CHECKIN_KV: 可选 KV binding，用于 Cookie 持久化和并发锁
 // BotToken: Telegram Bot Token（可选）
 // ChatID: Telegram Chat ID（可选，用于接收通知）
+
+const COOKIE_KEY = 'nodeseek:cookies';
+const LOCK_KEY = 'nodeseek:checkin-lock';
+const COOKIE_TTL = 60 * 60 * 24 * 30;
+const LOCK_TTL = 600;
+const FETCH_TIMEOUT = 25000;
 
 export default {
   async fetch(request, env) {
@@ -23,63 +31,189 @@ export default {
 async function handleRequest(request, env) {
   const url = new URL(request.url);
 
-  if (url.pathname === '/checkin' && request.method === 'POST') {
-    // 手动触发签到
+  if (url.pathname === '/checkin') {
+    if (request.method !== 'POST') {
+      return jsonResponse({ success: false, message: 'Method Not Allowed' }, 405);
+    }
+
+    const expected = (env.TRIGGER_TOKEN || '').trim();
+    if (!expected) {
+      return jsonResponse(
+        { success: false, message: 'TRIGGER_TOKEN 未配置，HTTP 触发已禁用' },
+        503
+      );
+    }
+
+    const authorization = request.headers.get('Authorization') || '';
+    const provided = authorization.startsWith('Bearer ')
+      ? authorization.slice('Bearer '.length).trim()
+      : '';
+    if (!provided || provided !== expected) {
+      return jsonResponse({ success: false, message: 'Unauthorized' }, 401);
+    }
+
+    const rateLimit = await checkRateLimit(env, request);
+    if (!rateLimit.allowed) {
+      return jsonResponse({ success: false, message: 'Too Many Requests' }, 429);
+    }
+
     const result = await performCheckin(env);
-    return new Response(JSON.stringify(result), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    const status = result.busy ? 409 : result.success ? 200 : 500;
+    return jsonResponse(result, status);
   }
 
   return new Response('NodeSeek 签到服务运行中', { status: 200 });
 }
 
 async function handleScheduled(env) {
-  await performCheckin(env);
+  const result = await performCheckin(env);
+  console.log(
+    `定时签到完成: total=${result.total}, success=${result.succeeded}, failed=${result.failed}`
+  );
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+  });
+}
+
+function timeoutSignal(ms) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT) {
+  return fetch(url, { ...options, signal: timeoutSignal(timeoutMs) });
+}
+
+// ==================== KV 持久化 / 并发锁 / 限流 ====================
+
+function getKv(env) {
+  return env && env.CHECKIN_KV ? env.CHECKIN_KV : null;
+}
+
+/**
+ * 读取 KV 中持久化的 Cookie 槽位。
+ *
+ * 存储格式为 JSON 对象：{ "0": "cookie...", "2": "cookie..." }，
+ * 键是账号下标，只保存非空槽位。旧的纯字符串格式（"a&&b"）仍可读取。
+ */
+async function loadPersistedSlots(env) {
+  const kv = getKv(env);
+  if (!kv) return {};
+  try {
+    const raw = (await kv.get(COOKIE_KEY)) || '';
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const slots = {};
+        for (const [index, value] of Object.entries(parsed)) {
+          if (value) slots[index] = String(value);
+        }
+        return slots;
+      }
+    } catch (parseError) {
+      // 旧格式：整条 Cookie 列表
+    }
+    const legacy = {};
+    splitCookieList(raw).forEach((value, index) => {
+      if (value) legacy[index] = value;
+    });
+    return legacy;
+  } catch (error) {
+    console.error('读取 KV Cookie 失败:', error.message);
+    return {};
+  }
+}
+
+/**
+ * 写回 KV 中持久化的 Cookie 槽位（只保存非空槽位）。
+ */
+async function persistSlots(env, slots) {
+  const kv = getKv(env);
+  if (!kv) return;
+  try {
+    const payload = {};
+    for (const [index, value] of Object.entries(slots)) {
+      if (value) payload[index] = String(value);
+    }
+    await kv.put(COOKIE_KEY, JSON.stringify(payload), { expirationTtl: COOKIE_TTL });
+  } catch (error) {
+    console.error('写入 KV Cookie 失败:', error.message);
+  }
+}
+
+async function acquireLock(env) {
+  const kv = getKv(env);
+  if (!kv) return true;
+  try {
+    if (await kv.get(LOCK_KEY)) return false;
+    await kv.put(LOCK_KEY, String(Date.now()), { expirationTtl: LOCK_TTL });
+    return true;
+  } catch (error) {
+    console.error('KV 锁操作失败，继续执行:', error.message);
+    return true;
+  }
+}
+
+async function releaseLock(env) {
+  const kv = getKv(env);
+  if (!kv) return;
+  try {
+    await kv.delete(LOCK_KEY);
+  } catch (error) {
+    console.error('释放 KV 锁失败:', error.message);
+  }
+}
+
+async function checkRateLimit(env, request) {
+  const kv = getKv(env);
+  if (!kv) return { allowed: true };
+
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const bucket = Math.floor(Date.now() / 600000);
+  const key = `nodeseek:rate:${ip}:${bucket}`;
+  try {
+    const current = parseInt((await kv.get(key)) || '0', 10);
+    if (current >= 10) return { allowed: false };
+    await kv.put(key, String(current + 1), { expirationTtl: 900 });
+    return { allowed: true };
+  } catch (error) {
+    console.error('KV 限流失败，继续执行:', error.message);
+    return { allowed: true };
+  }
 }
 
 // ==================== 2captcha 验证码解决器 ====================
 
 class TwoCaptchaSolver {
   constructor(apiKey, apiBaseUrl = 'https://api.2captcha.com') {
-    this.apiKey = apiKey;
-    this.createTaskUrl = `${apiBaseUrl}/createTask`;
-    this.getResultUrl = `${apiBaseUrl}/getTaskResult`;
-    this.maxRetries = 40; // 最大重试次数（2分钟）
-    this.retryInterval = 3000; // 重试间隔（3秒）
-  }
-
-  /**
-   * 解决 Turnstile 验证码
-   * @param {string} url - 网站URL
-   * @param {string} sitekey - 网站密钥
-   * @returns {Promise<string>} 验证令牌
-   */
-  async solve(url, sitekey) {
-    try {
-      console.log('开始创建验证码任务...');
-      const taskId = await this._createTask(url, sitekey);
-
-      if (!taskId) {
-        throw new Error('创建任务失败：未返回任务ID');
-      }
-
-      console.log(`任务已创建，ID: ${taskId}`);
-      console.log('等待验证码解决...');
-
-      const token = await this._getTaskResult(taskId);
-      console.log('✅ 验证码解决成功');
-
-      return token;
-    } catch (error) {
-      console.error(`❌ 验证码解决失败: ${error.message}`);
-      throw error;
+    const base = String(apiBaseUrl || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^/]+/i.test(base)) {
+      throw new Error('CAPTCHA_API_URL 必须是有效的 http(s) URL');
     }
+    this.apiKey = apiKey;
+    this.createTaskUrl = `${base}/createTask`;
+    this.getResultUrl = `${base}/getTaskResult`;
+    this.maxRetries = 40;
+    this.retryInterval = 3000;
   }
 
-  /**
-   * 创建验证码任务
-   */
+  async solve(url, sitekey) {
+    const taskId = await this._createTask(url, sitekey);
+    if (!taskId) {
+      throw new Error('创建任务失败：未返回任务ID');
+    }
+    return this._getTaskResult(taskId);
+  }
+
   async _createTask(url, sitekey) {
     const data = {
       clientKey: this.apiKey,
@@ -88,89 +222,71 @@ class TwoCaptchaSolver {
         websiteURL: url,
         websiteKey: sitekey
       },
-      softId: 0 // 可以设置为你的软件ID
+      softId: 0
     };
 
-    try {
-      const response = await fetch(this.createTaskUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(data)
-      });
+    const response = await fetchWithTimeout(this.createTaskUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-
-      if (result.errorId === 0) {
-        return result.taskId;
-      } else {
-        throw new Error(`API错误 (${result.errorId}): ${result.errorDescription || result.errorCode || '未知错误'}`);
-      }
-    } catch (error) {
-      if (error.message.includes('API错误')) {
-        throw error;
-      }
-      throw new Error(`创建任务请求失败: ${error.message}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
     }
+
+    const result = await response.json();
+    if (result.errorId === 0) {
+      return result.taskId;
+    }
+    throw new Error(
+      `API错误 (${result.errorId}): ${result.errorDescription || result.errorCode || '未知错误'}`
+    );
   }
 
-  /**
-   * 获取任务结果（轮询）
-   */
   async _getTaskResult(taskId) {
-    const data = {
-      clientKey: this.apiKey,
-      taskId: taskId
-    };
+    const data = { clientKey: this.apiKey, taskId };
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        const response = await fetch(this.getResultUrl, {
+        const response = await fetchWithTimeout(this.getResultUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          throw new Error(`HTTP ${response.status}`);
         }
 
         const result = await response.json();
 
         if (result.errorId !== 0) {
-          throw new Error(`API错误 (${result.errorId}): ${result.errorDescription || result.errorCode || '未知错误'}`);
-        }
-
-        const status = result.status;
-
-        if (status === 'ready') {
-          const token = result.solution?.token;
-          if (!token) {
-            throw new Error('解决成功但未返回令牌');
-          }
-          return token;
-        } else if (status === 'processing') {
-          console.log(`[${attempt}/${this.maxRetries}] 验证码处理中...`);
-          await this._sleep(this.retryInterval);
-        } else {
-          throw new Error(`未知状态: ${status}`);
-        }
-      } catch (error) {
-        if (error.message.includes('API错误') || error.message.includes('未知状态')) {
+          const error = new Error(
+            `API错误 (${result.errorId}): ${result.errorDescription || result.errorCode || '未知错误'}`
+          );
+          // API 业务错误是终态，继续轮询只会浪费时间。
+          error.terminal = true;
           throw error;
         }
 
-        if (attempt === this.maxRetries) {
-          throw new Error(`获取结果失败: ${error.message}`);
+        if (result.status === 'ready') {
+          const token = result.solution?.token;
+          if (!token) throw new Error('解决成功但未返回令牌');
+          return token;
         }
 
+        if (result.status === 'processing') {
+          console.log(`[${attempt}/${this.maxRetries}] 验证码处理中...`);
+          await this._sleep(this.retryInterval);
+          continue;
+        }
+
+        throw new Error(`未知状态: ${result.status}`);
+      } catch (error) {
+        if (error.terminal || attempt === this.maxRetries) {
+          throw new Error(`获取结果失败: ${error.message}`);
+        }
         console.log(`获取结果请求失败，重试中... (${attempt}/${this.maxRetries})`);
         await this._sleep(this.retryInterval);
       }
@@ -187,6 +303,31 @@ class TwoCaptchaSolver {
 // ==================== NodeSeek 签到逻辑 ====================
 
 /**
+ * 按 `&` 或换行切分 Cookie 列表。
+ *
+ * 中间的空槽位会被保留（表示"该账号暂无 Cookie"），
+ * 但末尾的空槽位会被丢弃：它不携带任何 Cookie 信息，
+ * 否则会凭空多出一个永远无法签到的账号。
+ */
+function splitCookieList(raw) {
+  if (!raw) return [];
+  const slots = String(raw)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n/g, '&')
+    .split('&')
+    .map(item => item.trim());
+  while (slots.length && !slots[slots.length - 1]) {
+    slots.pop();
+  }
+  return slots;
+}
+
+function joinCookieList(slots) {
+  return slots.map(item => (item ? String(item).trim() : '')).join('&');
+}
+
+/**
  * 执行签到主流程
  */
 async function performCheckin(env) {
@@ -194,109 +335,168 @@ async function performCheckin(env) {
   const passwords = env.pass || '';
   const captchaApiKey = env.CAPTCHA_API_KEY || '';
   const captchaApiUrl = env.CAPTCHA_API_URL || 'https://api.2captcha.com';
-  const nsCookies = env.NS_COOKIE || '';
   const botToken = env.BotToken || '';
   const chatId = env.ChatID || '';
 
-  // 验证必要参数
   if (!users || !passwords) {
-    const errorMsg = '❌ 未配置 user 或 pass 环境变量';
-    console.error(errorMsg);
-    await sendTelegramMessage(errorMsg, botToken, chatId);
-    return { success: false, message: errorMsg };
+    const result = aggregateResult(0, 0, 0, 0, '未配置 user 或 pass');
+    await sendTelegramMessage(formatTelegramSummary(result), botToken, chatId);
+    return result;
   }
 
-  if (!captchaApiKey) {
-    const errorMsg = '❌ 未配置 CAPTCHA_API_KEY 环境变量';
-    console.error(errorMsg);
-    await sendTelegramMessage(errorMsg, botToken, chatId);
-    return { success: false, message: errorMsg };
-  }
-
-  const userList = users.split('&').filter(u => u.trim());
-  const passList = passwords.split('&').filter(p => p.trim());
-  const cookieList = nsCookies.split('&').filter(c => c.trim());
-
+  const userList = users.split('&').map(item => item.trim());
+  const passList = passwords.split('&').map(item => item.trim());
   if (userList.length !== passList.length) {
-    const errorMsg = '❌ user 和 pass 的数量不匹配';
-    console.error(errorMsg);
-    await sendTelegramMessage(errorMsg, botToken, chatId);
-    return { success: false, message: errorMsg };
+    const result = aggregateResult(0, 0, 0, 0, 'user 和 pass 的数量不匹配');
+    await sendTelegramMessage(formatTelegramSummary(result), botToken, chatId);
+    return result;
   }
 
-  const results = [];
-  const allMessages = [];
+  if (!(await acquireLock(env))) {
+    return { ...aggregateResult(0, 0, 0, 0, '已有签到任务在运行'), busy: true };
+  }
 
-  for (let i = 0; i < userList.length; i++) {
-    const user = userList[i].trim();
-    const password = passList[i].trim();
-    const existingCookie = cookieList[i] || '';
+  let succeeded = 0;
+  let already = 0;
+  let failed = 0;
+  const total = userList.filter((user, index) => user || passList[index]).length;
 
-    console.log(`\n=== 处理账户 ${i + 1}: ${user} ===`);
+  try {
+    // 逐槽位合并 Cookie：
+    //   - KV 中已刷新的 Cookie 优先（Worker 上次运行刷新出来的）
+    //   - KV 中没有的槽位回退到面板里的 NS_COOKIE
+    // 不能整体二选一：面板里的 NS_COOKIE 是静态的，永远不会更新，
+    // 若整体优先使用它，KV 持久化就完全失效，每次都要重新购买验证码。
+    const envSlots = splitCookieList(env.NS_COOKIE || '');
+    const persistedSlots = await loadPersistedSlots(env);
 
-    try {
-      // 尝试使用现有 Cookie 签到
-      let cookie = existingCookie;
-      let loginAttempted = false;
+    const maxCount = Math.max(userList.length, envSlots.length);
+    const cookieSlots = [];
+    const refreshedSlots = {};
+    for (let i = 0; i < maxCount; i++) {
+      const persisted = persistedSlots[i];
+      const fromEnv = envSlots[i] || '';
+      cookieSlots[i] = persisted || fromEnv;
+      if (persisted) {
+        refreshedSlots[i] = persisted;
+      } else if (fromEnv) {
+        refreshedSlots[i] = fromEnv;
+      }
+    }
 
-      if (cookie) {
-        console.log('使用现有 Cookie 尝试签到...');
-        const signResult = await sign(cookie);
+    let cookiesChanged = false;
 
-        if (signResult.success) {
-          const msg = `账户${i + 1}(${user}): ✅ ${signResult.message}`;
-          results.push({ success: true, message: msg });
-          allMessages.push(msg);
-          continue;
-        } else if (signResult.needLogin) {
-          console.log('Cookie 已失效，需要重新登录');
-          loginAttempted = true;
-        }
+    for (let i = 0; i < userList.length; i++) {
+      const user = userList[i];
+      const password = passList[i];
+      if (!user && !password) {
+        continue;
+      }
+      if (!user || !password) {
+        failed++;
+        console.error(`账户 ${i + 1} 配置不完整，已跳过`);
+        continue;
       }
 
-      // 需要登录
-      if (!cookie || loginAttempted) {
-        console.log('开始登录流程...');
-        const loginResult = await sessionLogin(user, password, captchaApiKey, captchaApiUrl);
+      try {
+        let cookie = cookieSlots[i] || '';
+        let needLogin = !cookie;
 
+        if (cookie) {
+          const signResult = await sign(cookie);
+          if (signResult.success) {
+            if (signResult.already) already++;
+            else succeeded++;
+            continue;
+          }
+          if (signResult.needLogin) {
+            needLogin = true;
+          } else {
+            failed++;
+            console.error(`账户 ${i + 1} 签到失败: ${signResult.message}`);
+            continue;
+          }
+        }
+
+        if (!needLogin) {
+          failed++;
+          continue;
+        }
+
+        // 只有确实需要登录时才要求配置验证码密钥：
+        // 已有可用 Cookie 的账号在纯 Cookie 场景下根本用不到验证码。
+        if (!captchaApiKey) {
+          failed++;
+          console.error(`账户 ${i + 1} 需要登录但未配置 CAPTCHA_API_KEY`);
+          continue;
+        }
+
+        const loginResult = await sessionLogin(
+          user,
+          password,
+          captchaApiKey,
+          captchaApiUrl
+        );
         if (!loginResult.success) {
-          throw new Error(loginResult.message);
+          failed++;
+          console.error(`账户 ${i + 1} 登录失败: ${loginResult.message}`);
+          continue;
         }
 
         cookie = loginResult.cookie;
-        console.log('✅ 登录成功，开始签到...');
-
-        // 使用新 Cookie 签到
         const signResult = await sign(cookie);
-
         if (signResult.success) {
-          const msg = `账户${i + 1}(${user}): ✅ ${signResult.message} (已重新登录)`;
-          results.push({ success: true, message: msg });
-          allMessages.push(msg);
+          cookieSlots[i] = cookie;
+          refreshedSlots[i] = cookie;
+          cookiesChanged = true;
+          if (signResult.already) already++;
+          else succeeded++;
         } else {
-          throw new Error(signResult.message);
+          failed++;
+          console.error(`账户 ${i + 1} 重新签到失败: ${signResult.message}`);
         }
+      } catch (error) {
+        failed++;
+        console.error(`账户 ${i + 1} 处理异常: ${error.message}`);
       }
-    } catch (error) {
-      const errorMsg = `账户${i + 1}(${user}): ❌ ${error.message}`;
-      results.push({ success: false, message: errorMsg });
-      allMessages.push(errorMsg);
-      console.error(errorMsg);
     }
+
+    if (cookiesChanged) {
+      await persistSlots(env, refreshedSlots);
+    }
+  } finally {
+    await releaseLock(env);
   }
 
-  // 发送汇总消息到 Telegram
-  const successCount = results.filter(r => r.success).length;
-  const totalCount = results.length;
-  const summaryMsg = `🔔 NodeSeek 签到结果 (${successCount}/${totalCount})\n\n${allMessages.join('\n')}`;
+  const result = aggregateResult(total, succeeded, already, failed, '签到完成');
+  await sendTelegramMessage(formatTelegramSummary(result), botToken, chatId);
+  return result;
+}
 
-  await sendTelegramMessage(summaryMsg, botToken, chatId);
-
+function aggregateResult(total, succeeded, already, failed, message) {
   return {
-    success: results.some(r => r.success),
-    results: results,
-    message: summaryMsg
+    success: total > 0 && failed === 0,
+    total,
+    succeeded,
+    already,
+    failed,
+    message
   };
+}
+
+function formatTelegramSummary(result) {
+  const lines = [
+    `🔔 NodeSeek 签到结果`,
+    '',
+    `总计: ${result.total}`,
+    `成功: ${result.succeeded}`,
+    `已签到: ${result.already}`,
+    `失败: ${result.failed}`
+  ];
+  if (result.message && result.message !== '签到完成') {
+    lines.push('', `说明: ${result.message}`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -304,18 +504,12 @@ async function performCheckin(env) {
  */
 async function sessionLogin(user, password, captchaApiKey, captchaApiUrl) {
   try {
-    // 1. 解决验证码
-    console.log('正在使用 2captcha 解决验证码...');
     const solver = new TwoCaptchaSolver(captchaApiKey, captchaApiUrl);
-
     const token = await solver.solve(
       'https://www.nodeseek.com/signIn.html',
       '0x4AAAAAAAaNy7leGjewpVyR'
     );
 
-    console.log('验证码令牌已获取');
-
-    // 2. 提交登录请求
     const loginData = {
       username: user,
       password: password,
@@ -323,56 +517,58 @@ async function sessionLogin(user, password, captchaApiKey, captchaApiUrl) {
       source: 'turnstile'
     };
 
-    const response = await fetch('https://www.nodeseek.com/api/account/signIn', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Origin': 'https://www.nodeseek.com',
-        'Referer': 'https://www.nodeseek.com/signIn.html'
-      },
-      body: JSON.stringify(loginData)
-    });
+    const response = await fetchWithTimeout(
+      'https://www.nodeseek.com/api/account/signIn',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          Origin: 'https://www.nodeseek.com',
+          Referer: 'https://www.nodeseek.com/signIn.html'
+        },
+        body: JSON.stringify(loginData)
+      }
+    );
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      throw new Error(`HTTP ${response.status}`);
     }
 
     const data = await response.json();
-
-    if (data.success) {
-      // 提取 Cookie
-      const setCookieHeaders = response.headers.get('set-cookie') || '';
-      let cookie = '';
-
-      if (setCookieHeaders) {
-        // 解析 Set-Cookie 头
-        const cookies = setCookieHeaders.split(',').map(c => {
-          const parts = c.trim().split(';');
-          return parts[0]; // 只取第一部分 (name=value)
-        }).join('; ');
-        cookie = cookies;
-      }
-
-      console.log(`✅ 登录成功: ${data.message || '登录成功'}`);
-
-      return {
-        success: true,
-        cookie: cookie,
-        message: data.message || '登录成功'
-      };
-    } else {
+    if (!data.success) {
       throw new Error(data.message || '登录失败');
     }
+
+    const cookie = extractCookies(response);
+    if (!cookie) {
+      throw new Error('登录成功但未获得 Cookie');
+    }
+
+    return { success: true, cookie, message: data.message || '登录成功' };
   } catch (error) {
-    console.error(`❌ 登录失败: ${error.message}`);
-    return {
-      success: false,
-      message: `登录失败: ${error.message}`
-    };
+    console.error(`登录失败: ${error.message}`);
+    return { success: false, message: error.message };
   }
+}
+
+function extractCookies(response) {
+  let headers = [];
+  if (typeof response.headers.getSetCookie === 'function') {
+    headers = response.headers.getSetCookie();
+  } else {
+    const raw = response.headers.get('set-cookie');
+    if (raw) {
+      headers = raw.split(/,(?=[^;]+=[^;]+)/);
+    }
+  }
+  return headers
+    .map(item => item.split(';')[0].trim())
+    .filter(item => item.includes('='))
+    .join('; ');
 }
 
 /**
@@ -380,76 +576,80 @@ async function sessionLogin(user, password, captchaApiKey, captchaApiUrl) {
  */
 async function sign(cookie) {
   if (!cookie) {
-    return {
-      success: false,
-      needLogin: true,
-      message: '无有效Cookie'
-    };
+    return { success: false, needLogin: true, message: '无有效Cookie' };
   }
 
   try {
-    // 生成随机数
     const random = Math.random().toString(36).substring(2, 15);
-
-    const response = await fetch(`https://www.nodeseek.com/api/attendance?random=${random}`, {
-      method: 'POST',
-      headers: {
-        'Cookie': cookie,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Origin': 'https://www.nodeseek.com',
-        'Referer': 'https://www.nodeseek.com/'
+    const response = await fetchWithTimeout(
+      `https://www.nodeseek.com/api/attendance?random=${random}`,
+      {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Accept: 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          Origin: 'https://www.nodeseek.com',
+          Referer: 'https://www.nodeseek.com/'
+        }
       }
-    });
+    );
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      throw new Error(`HTTP ${response.status}`);
     }
 
     const data = await response.json();
     const msg = data.message || '';
 
-    // 判断签到结果
-    if (msg.includes('鸡腿') || data.success) {
-      return {
-        success: true,
-        needLogin: false,
-        message: msg
-      };
-    } else if (msg.includes('已完成签到')) {
-      return {
-        success: true,
-        needLogin: false,
-        message: msg
-      };
-    } else if (data.status === 404 || msg.includes('请先登录')) {
-      return {
-        success: false,
-        needLogin: true,
-        message: 'Cookie已失效'
-      };
-    } else {
-      throw new Error(msg || '签到失败');
+    // 判定顺序：先看消息里的明确信号，最后才回退到通用的 success 标志。
+    //   - "鸡腿"：本次确实拿到了奖励，属于新签到。
+    //   - "已完成签到"：今日已签，需单独计数。若接口同时返回 success=true，
+    //     先前的顺序会让 "already" 永远不会被统计。
+    //   - 404 / "请先登录" / "未登录"：会话失效，需重新登录，
+    //     且要优先于 success 标志。
+    if (msg.includes('鸡腿')) {
+      return { success: true, already: false, needLogin: false, message: msg };
     }
+
+    if (msg.includes('已完成签到')) {
+      return { success: true, already: true, needLogin: false, message: msg };
+    }
+
+    if (data.status === 404 || msg.includes('请先登录') || msg.includes('未登录')) {
+      return { success: false, needLogin: true, message: 'Cookie已失效' };
+    }
+
+    if (data.success) {
+      return { success: true, already: false, needLogin: false, message: msg };
+    }
+
+    return { success: false, needLogin: false, message: msg || '签到失败' };
   } catch (error) {
-    console.error(`❌ 签到失败: ${error.message}`);
-    return {
-      success: false,
-      needLogin: false,
-      message: error.message
-    };
+    console.error(`签到失败: ${error.message}`);
+    return { success: false, needLogin: false, message: error.message };
   }
 }
 
 // ==================== Telegram 通知 ====================
 
-/**
- * 发送 Telegram 消息
- */
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function sendTelegramMessage(message, botToken, chatId) {
   if (!chatId) {
-    console.log('未配置 ChatID，跳过 Telegram 通知');
+    return;
+  }
+  if (!botToken || !botToken.trim()) {
+    console.log('未配置 BotToken，跳过 Telegram 通知');
     return;
   }
 
@@ -467,35 +667,21 @@ async function sendTelegramMessage(message, botToken, chatId) {
   const fullMessage = `执行时间: ${formattedTime}\n\n${message}`;
 
   try {
-    let url;
-    if (botToken && botToken.trim() !== '') {
-      // 使用官方 Telegram API
-      url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    } else {
-      // 使用第三方代理服务（不推荐）
-      console.log('⚠️ 未配置 BotToken，使用第三方代理服务');
-      url = `https://api.tg.090227.xyz/sendMessage`;
-    }
-
-    const response = await fetch(url, {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text: fullMessage,
+        text: escapeHtml(fullMessage),
         parse_mode: 'HTML'
       })
     });
 
-    if (response.ok) {
-      console.log('✅ Telegram 消息发送成功');
-    } else {
-      const errorText = await response.text();
-      console.error('❌ Telegram 消息发送失败:', response.status, errorText);
+    if (!response.ok) {
+      console.error('Telegram 消息发送失败:', response.status);
     }
   } catch (error) {
-    console.error('❌ 发送 Telegram 消息时出错:', error.message);
+    console.error('发送 Telegram 消息时出错:', error.message);
   }
 }
