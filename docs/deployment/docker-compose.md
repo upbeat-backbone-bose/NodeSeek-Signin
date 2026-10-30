@@ -20,33 +20,44 @@ cp .env.example .env
 ```
 
 你需要根据注释提示，填写以下关键信息：
-- **账户信息**: `USER1`, `PASS1`, `USER2`, `PASS2` 等。
+- **账户信息**: `USER`, `PASS` 以及 `USER1`, `PASS1`, `USER2`, `PASS2` 等。
 - **验证码服务**: 如果使用账号密码登录，必须配置验证码服务。推荐使用 `yescaptcha`，并填入 `CLIENT_KEY`。
 - **定时任务**: `RUN_AT` 变量用于设置签到任务的执行时间。
     - **固定时间**: 如 `10:30`，表示每天上午10点30分执行。
     - **时间范围**: 如 `10:00-18:00`，表示在每天上午10点到下午6点之间随机选择一个时间点执行。
     - **默认值**: 如果不设置，默认为 `09:00-21:00`。
+    - 若启动时已处于时间范围内，会立即执行一次；之后每天只运行一次。
 
-**第三步：启动服务**
+**第三步：准备 Cookie 目录权限**
+
+容器以 UID/GID `1000` 运行。首次启动前请确保宿主机 `./cookie` 目录可写：
+
+```bash
+mkdir -p cookie
+sudo chown -R 1000:1000 cookie
+```
+
+**第四步：启动服务**
 
 在存放 `docker-compose.yml` 和 `.env` 文件的目录下，执行以下命令在后台构建并启动服务：
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
-**第四步：查看日志**
-
-你可以使用以下命令实时查看容器的日志，以确认服务是否正常运行和签到是否成功：
+**第五步：查看日志与健康状态**
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
+docker inspect --format '{{.State.Health.Status}}' nodeseek-signin
 ```
 
-**第五步：停止服务**
+调度器会持续更新 `cookie/heartbeat`；超过 10 分钟未更新时健康检查会标记为 unhealthy。
 
-如果需要停止并移除服务容器，可以执行以下命令：
+**第六步：停止服务**
 
 ```bash
-docker-compose down
+docker compose down
 ```
+
+> 如果宿主机目录无法使用 UID 1000，请修改 `docker-compose.yml` 中的 `user`，并同步调整目录属主。

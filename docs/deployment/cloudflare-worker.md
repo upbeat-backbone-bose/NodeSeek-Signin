@@ -4,337 +4,189 @@
 
 ## 功能特性
 
-- ✅ 自动解决 Cloudflare Turnstile 验证码（使用 2captcha）
+- ✅ 使用 2captcha 解决 Turnstile 验证码
 - ✅ 支持多账户批量签到
-- ✅ 支持定时任务自动执行
-- ✅ 支持手动触发签到
-- ✅ Telegram 通知推送
-- ✅ Cookie 自动管理和更新
-- ✅ 登录失败自动重试
+- ✅ 支持 Cron 定时任务和带鉴权的手动触发
+- ✅ 可选 KV 持久化 Cookie，减少重复登录和验证码消耗
+- ✅ KV 并发锁与简单限流，避免重复执行
+- ✅ Telegram 官方 API 通知（不再使用第三方中转）
+- ✅ 对外只返回聚合结果，不泄露用户名和逐账号错误
 
 ## 部署步骤
 
 ### 1. 准备工作
 
-#### 1.1 注册 2captcha 账号
+1. 注册 [2captcha](https://2captcha.com/)，充值并在 API 设置页面获取 `CAPTCHA_API_KEY`。
+2. 生成一个足够长的随机字符串作为 `TRIGGER_TOKEN`，用于保护 `/checkin`。
+3. 可选：与 [@BotFather](https://t.me/BotFather) 创建 Bot 获取 `BotToken`，再获取接收通知的 `ChatID`。
 
-1. 访问 [2captcha.com](https://2captcha.com/)
-2. 注册账号并充值
-3. 在 [API 设置页面](https://2captcha.com/enterpage) 获取 API Key
+### 2. 创建 Worker
 
-#### 1.2 获取 Telegram 通知参数（可选）
+#### 方式一：Cloudflare Dashboard
 
-如果需要接收 Telegram 通知：
+1. 登录 Cloudflare Dashboard，进入 Workers & Pages。
+2. 创建 Worker，命名例如 `nodeseek-signin`。
+3. 编辑代码，粘贴 `nodeseek-cloudflare-worker.js` 的全部内容并部署。
+4. 在 `设置 -> 变量和机密` 中添加下方环境变量；`TRIGGER_TOKEN`、`CAPTCHA_API_KEY` 建议使用“机密”类型（`CAPTCHA_API_KEY` 仅在需要重新登录时才会用到）。
 
-1. 创建 Bot：与 [@BotFather](https://t.me/BotFather) 对话，发送 `/newbot` 创建机器人，获取 `Bot Token`
-2. 获取 Chat ID：与 [@userinfobot](https://t.me/userinfobot) 对话，获取你的 `Chat ID`
-
-### 2. 部署到 Cloudflare Workers
-
-#### 方式一：通过 Cloudflare Dashboard（推荐新手）
-
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
-2. 进入 Workers & Pages
-3. 点击 "创建应用程序" → "创建 Worker"
-4. 给 Worker 起个名字，如 `nodeseek-signin`
-5. 点击 "部署"
-6. 点击 "编辑代码"
-7. 删除默认代码，复制 `nodeseek-cloudflare-worker.js` 的全部内容
-8. 点击 "保存并部署"
-
-#### 方式二：使用 Wrangler CLI
+#### 方式二：Wrangler CLI
 
 ```bash
-# 安装 Wrangler
 npm install -g wrangler
-
-# 登录 Cloudflare
 wrangler login
+```
 
-# 创建 wrangler.toml 配置文件
-cat > wrangler.toml << EOF
+创建 `wrangler.toml`：
+
+```toml
 name = "nodeseek-signin"
 main = "nodeseek-cloudflare-worker.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2026-01-01"
 
-[vars]
-# 这里可以配置非敏感的环境变量
-EOF
+[triggers]
+crons = ["0 9 * * *"]
 
-# 部署
+# 可选：绑定 KV 以持久化 Cookie 和启用并发锁
+# [[kv_namespaces]]
+# binding = "CHECKIN_KV"
+# id = "<your-kv-namespace-id>"
+```
+
+部署：
+
+```bash
 wrangler deploy
 ```
 
 ### 3. 配置环境变量
 
-在 Cloudflare Dashboard 中：
+| 变量名 | 必要性 | 说明 |
+| --- | --- | --- |
+| `user` | 必填 | NodeSeek 用户名，多个用 `&` 分隔 |
+| `pass` | 必填 | 密码，多个用 `&` 分隔，与 `user` 一一对应 |
+| `CAPTCHA_API_KEY` | 需要登录时必填 | 2captcha API Key；只有账号没有可用 Cookie 或 Cookie 明确失效时才会用到 |
+| `TRIGGER_TOKEN` | HTTP 触发必填 | `/checkin` 的 Bearer Token；未配置时 HTTP 触发返回 503 |
+| `CAPTCHA_API_URL` | 可选 | 默认 `https://api.2captcha.com`，必须是 http(s) URL |
+| `NS_COOKIE` | 可选 | 已有 Cookie，多个用 `&` 分隔；空槽位用 `&&` 保留 |
+| `CHECKIN_KV` | 可选（推荐） | KV binding 名称；绑定后持久化 Cookie、启用并发锁和限流 |
+| `BotToken` | 可选 | Telegram Bot Token |
+| `ChatID` | 可选 | Telegram Chat ID |
 
-1. 进入你的 Worker
-2. 点击 "设置" → "变量"
-3. 添加以下环境变量：
+示例：
 
-#### 必填环境变量
-
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `user` | NodeSeek 用户名（多个用`&`分隔） | `user1&user2` |
-| `pass` | 密码（多个用`&`分隔，与user对应） | `pass1&pass2` |
-| `CAPTCHA_API_KEY` | 2captcha API密钥 | `abc123def456...` |
-
-#### 可选环境变量
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `CAPTCHA_API_URL` | 2captcha API地址 | `https://api.2captcha.com` |
-| `NS_COOKIE` | 已有的Cookie（可选，多个用`&`分隔） | - |
-| `BotToken` | Telegram Bot Token | - |
-| `ChatID` | Telegram Chat ID | - |
-
-#### 配置示例
-
-```
+```text
 user: alice&bob
 pass: password123&password456
 CAPTCHA_API_KEY: 1234567890abcdef1234567890abcdef
+TRIGGER_TOKEN: a-long-random-token
+NS_COOKIE: session=...&session=...
 BotToken: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 ChatID: 123456789
 ```
 
-**注意事项：**
-- `user` 和 `pass` 的数量必须一一对应
-- 如果提供了 `NS_COOKIE`，会先尝试使用 Cookie 签到，失败后才会登录
-- 2captcha 服务需要付费，请确保账户有足够余额
+### 4. 配置 KV（推荐）
 
-### 4. 设置定时任务
+1. 在 Cloudflare Dashboard 中创建 KV namespace。
+2. 在 Worker 的 `设置 -> 绑定` 中添加 KV namespace，变量名填写 `CHECKIN_KV`。
+3. 重新部署。
 
-在 Cloudflare Dashboard 中：
+绑定后：
 
-1. 进入你的 Worker
-2. 点击 "触发器" → "Cron 触发器"
-3. 点击 "添加 Cron 触发器"
-4. 输入 Cron 表达式，例如：
-   - `0 9 * * *`（每天上午9点执行）
-   - `0 */12 * * *`（每12小时执行一次）
-   - `30 8 * * *`（每天上午8:30执行）
-5. 点击 "添加触发器"
+- 登录成功的新 Cookie 会按账号下标写入 `nodeseek:cookies`，有效期 30 天。
+- **KV 中已刷新的 Cookie 优先于面板里的 `NS_COOKIE`**：面板里的值是静态的，永远不会更新；每次运行会用 KV 中对应下标的新值覆盖它，仅在 KV 缺少该下标时才回退到面板值。这样重新登录的结果才能真正被复用，避免每次运行都重新购买验证码。
+- 每次签到会尝试获取 `nodeseek:checkin-lock`，防止定时任务和手动触发重叠。
+- 手动触发会按 IP 做简单限流（每 10 分钟最多 10 次）。
 
-#### Cron 表达式说明
+未绑定 KV 时 Worker 仍可运行，但每次 Cookie 失效都需要重新登录并购买验证码，且没有并发锁。
 
-```
-┌───────────── 分钟 (0 - 59)
-│ ┌───────────── 小时 (0 - 23)
-│ │ ┌───────────── 日期 (1 - 31)
-│ │ │ ┌───────────── 月份 (1 - 12)
-│ │ │ │ ┌───────────── 星期 (0 - 6) (0 = 星期日)
-│ │ │ │ │
-* * * * *
-```
+> 如果需要让面板里的 `NS_COOKIE` 重新生效（例如手动换了一个新 Cookie），删除 KV 中的 `nodeseek:cookies` 键即可，Worker 会回退到面板值。
 
-**常用示例：**
-- `0 9 * * *` - 每天上午9点
-- `0 0 * * *` - 每天凌晨12点
-- `0 */6 * * *` - 每6小时一次
-- `0 8,20 * * *` - 每天上午8点和晚上8点
+### 5. 设置定时任务
 
-### 5. 手动触发签到
+在 Dashboard 的 `触发器 -> Cron 触发器` 中添加，例如：
 
-你可以通过 HTTP POST 请求手动触发签到：
+- `0 9 * * *`：每天 UTC 09:00（北京时间 17:00）
+- `0 1 * * *`：每天 UTC 01:00（北京时间 09:00）
+
+Cron 使用 UTC，请按需换算。
+
+### 6. 手动触发
 
 ```bash
-curl -X POST https://your-worker-name.your-subdomain.workers.dev/checkin
+curl -X POST https://your-worker-name.your-subdomain.workers.dev/checkin \
+  -H "Authorization: Bearer <TRIGGER_TOKEN>"
 ```
 
-## 工作原理
+返回示例（只包含聚合结果）：
 
-1. **定时执行或手动触发**：根据 Cron 设置自动执行，或通过 HTTP 请求手动触发
-2. **读取账户配置**：从环境变量读取账户信息
-3. **验证码解决**：
-   - 使用 2captcha API 创建 Turnstile 验证码任务
-   - 轮询获取验证码解决结果（最多等待2分钟）
-4. **登录**：使用验证码令牌进行登录，获取 Cookie
-5. **签到**：使用 Cookie 调用签到 API
-6. **Cookie 管理**：
-   - 如果提供了 `NS_COOKIE`，优先使用
-   - 如果 Cookie 失效，自动重新登录获取新 Cookie
-7. **通知推送**：将签到结果通过 Telegram 发送
-
-## 注意事项
-
-### 关于 2captcha
-
-- **费用**：2captcha 是付费服务，Turnstile 验证码约 $2.99/1000次
-- **速度**：通常在 10-60 秒内解决验证码
-- **余额**：请确保账户有足够余额，否则会报错
-- **API限制**：注意 API 调用频率限制
-
-### 关于 Cloudflare Workers
-
-- **免费额度**：每天 100,000 次请求
-- **执行时间限制**：
-  - 免费版：最多 10ms CPU 时间
-  - 付费版：最多 50ms CPU 时间
-- **定时任务**：
-  - 免费版：不支持 Cron 触发器
-  - 付费版（$5/月）：支持 Cron 触发器
-
-### Cookie 说明
-
-- Cookie 有效期通常较长，可以多次使用
-- 如果提供了 `NS_COOKIE` 环境变量，会优先使用现有 Cookie
-- Cookie 失效时会自动重新登录（需要解决验证码）
-- 建议定期手动登录一次，更新 `NS_COOKIE` 环境变量
-
-### 关于 Telegram 通知
-
-#### BotToken 配置要求
-
-**强烈建议配置 `BotToken`**。代码中的逻辑如下：
-
-```javascript
-if (botToken && botToken.trim() !== '') {
-  // ✅ 使用官方 Telegram API
-  url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-} else {
-  // ⚠️ BotToken 为空时，使用第三方代理
-  url = `https://api.tg.090227.xyz/sendMessage`;
+```json
+{
+  "success": true,
+  "total": 2,
+  "succeeded": 1,
+  "already": 1,
+  "failed": 0,
+  "message": "签到完成"
 }
 ```
 
-#### 第三方代理风险说明
+未授权返回 401，未配置 `TRIGGER_TOKEN` 返回 503，已有任务运行或触发过于频繁返回 409/429，配置错误或签到失败返回 500。
 
-| 情况 | BotToken 配置 | 目标域名 | BotToken 是否发送 | 发送内容 |
-|------|---------------|----------|-------------------|----------|
-| 正常配置 | 已配置 | `api.telegram.org` | **否** | 消息内容 |
-| 回退方案 | 未配置 | `api.tg.090227.xyz` | **不适用** - Token 为空 | `chat_id` + 消息内容 |
+## 工作原理
 
-**风险评估**：
-- ✅ **BotToken 不会被发送到第三方** - 当 `BotToken` 为空时，说明用户未配置，第三方也无可用凭据
-- ⚠️ **`chat_id` 和消息内容会被第三方获取** - 第三方服务商可能记录你的 Telegram ID 和签到消息
+1. 定时任务或带 Bearer Token 的 HTTP 请求触发签到。
+2. 逐槽位合并 Cookie：优先取 KV 中该下标已刷新的值，KV 缺失时回退到 `NS_COOKIE` 的对应下标。
+3. 使用合并后的 Cookie 调用签到 API。
+4. 只有账号没有可用 Cookie、或 Cookie 明确失效（404 / 未登录 / 请先登录）时才调用 2captcha 登录；网络错误和 Cloudflare 403 不会触发付费求解。`CAPTCHA_API_KEY` 仅在确实需要登录时才要求配置。
+5. 登录成功后更新内存中的 Cookie 槽位；绑定 KV 时按槽位写回 KV。
+6. 通过 Telegram 官方 API 发送聚合通知；配置错误（缺少 `user`/`pass`，或两者数量不匹配）同样会发送通知，不再静默失败。缺少 `CAPTCHA_API_KEY` 且确实需要登录时，该账号计为失败并发送通知。
 
-**建议**：
-1. **务必配置 `BotToken`**，使用官方 Telegram API
-2. 如因网络问题无法访问 Telegram 官方 API，必须使用第三方代理时：
-   - 理解并接受 `chat_id` 和消息内容会被第三方获取的风险
-   - 签到结果消息通常为公开信息（成功/失败状态），敏感度较低
-3. 第三方代理地址 `api.tg.090227.xyz` 由第三方运营，存在服务稳定性风险
+## 安全说明
+
+- `/checkin` 不再允许匿名调用；请务必设置高强度 `TRIGGER_TOKEN`。
+- Worker 不返回用户名、逐账号结果或原始异常，避免信息泄露。
+- 已移除第三方 Telegram 中转；未配置 `BotToken` 时直接跳过通知。
+- Telegram 消息内容会做 HTML 转义。
+- 所有外部请求使用 `AbortSignal.timeout`，避免无限等待。
+- KV 锁为 best-effort：Cloudflare KV 不提供原子比较交换，极端并发下仍可能重叠。
+- 请不要把真实 Cookie、密码或 API Key 写进代码仓库。
+
+## 成本与限制
+
+- 2captcha 按次计费，Turnstile 价格以官网为准。
+- Cloudflare Workers 的 CPU 时间、Cron、KV 配额随套餐变化，请以 Cloudflare 当前文档为准。
+- Worker 的单次请求有执行时间上限；账号很多时建议拆分 Worker 或改用 Docker/GitHub Actions。
 
 ## 故障排查
 
-### 1. 签到失败
+### 签到失败
 
-**可能原因：**
-- Cookie 已失效
-- 账号密码错误
-- 验证码解决失败
-- 2captcha 余额不足
+- 检查 `user`/`pass` 数量是否一致。
+- 检查 `CAPTCHA_API_KEY` 余额和权限。
+- 查看 Worker 实时日志；对外响应只保留聚合信息。
 
-**解决方法：**
-- 检查 Cloudflare Workers 日志
-- 验证账号密码是否正确
-- 检查 2captcha 余额
-- 尝试手动触发签到测试
+### 验证码超时
 
-### 2. 验证码解决超时
+- 确认 `CAPTCHA_API_URL` 可访问且为 http(s)。
+- 检查 2captcha 服务状态和余额。
+- 适当增加代码中的 `maxRetries` 或 `retryInterval`。
 
-**可能原因：**
-- 2captcha 服务繁忙
-- API 密钥错误
-- 网络连接问题
+### 收不到 Telegram 通知
 
-**解决方法：**
-- 检查 `CAPTCHA_API_KEY` 是否正确
-- 增加重试次数（修改代码中的 `maxRetries`）
-- 更换 2captcha API 节点
+- 确认同时配置了 `BotToken` 和 `ChatID`。
+- 先与 Bot 对话一次激活。
+- 未配置 `BotToken` 时不会回退到任何第三方服务。
 
-### 3. Telegram 通知未收到
+### 定时任务未执行
 
-**可能原因：**
-- Bot Token 或 Chat ID 错误
-- Bot 未启动或被封禁
-- Telegram API 被墙
-- 未配置 BotToken（会使用第三方代理，但不稳定）
+- 检查 Cron 表达式和 UTC 时区换算。
+- 确认 Worker 已部署且未被禁用。
+- 查看 Cloudflare 的 Cron 触发日志。
 
-**解决方法：**
-- 验证 Bot Token 和 Chat ID 是否正确
-- 与 Bot 对话一次激活
-- **务必配置 BotToken** 使用官方 API，详见上方「关于 Telegram 通知」章节
-- 如必须使用第三方代理，需接受 `chat_id` 和消息内容被第三方获取的风险
+## 升级
 
-### 4. 定时任务未执行
+替换 `nodeseek-cloudflare-worker.js` 后重新部署。环境变量和 KV binding 无需重新配置。
 
-**可能原因：**
-- 使用的是免费版 Workers（不支持 Cron）
-- Cron 表达式错误
-- Worker 被禁用
+## 许可证与免责声明
 
-**解决方法：**
-- 升级到 Workers 付费版（$5/月）
-- 检查 Cron 表达式语法
-- 检查 Worker 状态
-
-## 查看日志
-
-在 Cloudflare Dashboard 中：
-
-1. 进入你的 Worker
-2. 点击 "日志" → "开始流式传输"
-3. 手动触发一次签到查看实时日志
-4. 或者等待定时任务执行
-
-## 升级说明
-
-如需更新代码：
-
-1. 编辑 Worker 代码
-2. 替换为新版本的 `nodeseek-cloudflare-worker.js` 内容
-3. 点击 "保存并部署"
-
-环境变量无需重新配置。
-
-## 成本估算
-
-假设每天签到 2 个账号：
-
-- **2captcha 费用**：
-  - 每次登录需要解决 1 次验证码
-  - 假设每月登录 10 次（Cookie 失效）
-  - 费用：10 次 × $2.99/1000 = $0.03/月
-
-- **Cloudflare Workers 费用**：
-  - 定时任务需要付费版：$5/月
-  - 或使用外部定时服务免费触发（如 cron-job.org）
-
-**总计**：约 $5/月（如果使用 Workers 定时任务）
-
-## 替代方案
-
-如果不想付费使用 Cloudflare Workers 的定时任务，可以：
-
-1. **使用外部定时服务**：
-   - [cron-job.org](https://cron-job.org/)（免费）
-   - [EasyCron](https://www.easycron.com/)（免费额度）
-   - GitHub Actions（完全免费）
-
-2. **手动触发**：
-   - 每天手动访问 `/checkin` 接口
-   - 使用浏览器书签快速触发
-
-## 技术支持
-
-如遇到问题：
-
-1. 查看 Cloudflare Workers 日志
-2. 检查环境变量配置
-3. 验证 2captcha 余额和 API Key
-4. 提交 Issue 到原项目仓库
-
-## 许可证
-
-本项目基于原 NodeSeek-Signin 项目改编，遵循相同的开源许可证。
-
-## 免责声明
-
-- 本脚本仅供学习交流使用
-- 使用本脚本产生的任何后果由使用者自行承担
-- 请遵守 NodeSeek 网站的服务条款
-- 请勿滥用自动化工具
+本项目基于原 NodeSeek-Signin 项目改编，遵循相同的开源许可证。脚本仅供学习交流使用，请遵守 NodeSeek 的服务条款；使用本脚本产生的任何后果由使用者自行承担。

@@ -19,13 +19,15 @@
 核心执行路径如下：
 
 1. `scheduler.py`（可选）决定执行时间并调用 `nodeseek_sign.py`。
-2. `nodeseek_sign.py` 按账号与 Cookie 执行签到，失败时尝试登录刷新。
+2. `nodeseek_sign.py` 按账号与 Cookie 执行签到；仅 Cookie 明确失效时尝试登录刷新。
 3. 成功后查询近 30 天签到收益，并通过 `notify.py` 发送通知（若可用）。
-4. 新 Cookie 根据环境回写到 Docker 文件、青龙变量或 GitHub Actions Variables。
+4. 新 Cookie 根据环境回写到 Docker 文件、青龙变量或加密 GitHub Secret（默认关闭）。
 
 ## 代码边界
 
 - 业务核心在根目录 Python 文件，不是 package 化工程。
+- `config.py` 统一环境变量解析；`cookie_store.py` 负责 Cookie 解析与原子持久化。
+- `tests/` 为 pytest 单元测试，不访问网络。
 - `nodeseek-cloudflare-worker.js` 是独立 JS 版本实现，不参与 Python 主链路。
 - `.github/workflows/` 仅负责 CI/CD 与定时触发，不包含业务逻辑实现。
 - `docs/` 目录是面向用户的部署与配置文档；`docs/wiki/` 是面向开发者的代码导向文档。
