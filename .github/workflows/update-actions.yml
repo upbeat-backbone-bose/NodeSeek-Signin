@@ -1,107 +1,40 @@
-name: Update GitHub Actions
+name: Verify Pinned Actions
 
 on:
-  schedule:
-    - cron: '0 9 * * 1'  # 每周一 09:00 (UTC+8)
+  pull_request:
+    paths:
+      - '.github/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  outdated-actions:
+  verify-pinned:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: 检出仓库
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: 查找过时的 actions
-        id: find
+      - name: Require SHA-pinned actions
+        shell: bash
         run: |
-          echo "Checking for outdated GitHub Actions..."
-
-          echo "outdated=$(grep -E "^[[:space:]]*uses: actions/" .github/workflows/*.yml | grep -v "update-actions.yml" | sed 's/.*: *uses: actions\/\([^@]*\)@\(.*\)/{"action":"\1","version":"\2"}/' | jq -c -s '.' 2>/dev/null || echo '[]')" >> $GITHUB_OUTPUT
-
-      - name: 检测并生成报告
-        if: steps.find.outputs.outdated != '[]' && steps.find.outputs.outdated != ''
-        uses: actions/github-script@v9
-        with:
-          result-encoding: string
-          script: |
-            const outdatedStr = `${{ steps.find.outputs.outdated }}`;
-
-            if (!outdatedStr || outdatedStr === '[]') {
-              console.log('所有 GitHub Actions 都已是最新版本');
-              return;
-            }
-
-            let outdatedActions;
-            try {
-              outdatedActions = JSON.parse(outdatedStr);
-            } catch (e) {
-              console.log('解析 actions 列表失败:', e.message);
-              return;
-            }
-
-            if (!Array.isArray(outdatedActions) || outdatedActions.length === 0) {
-              console.log('所有 GitHub Actions 都已是最新版本');
-              return;
-            }
-
-            const results = [];
-
-            for (const item of outdatedActions) {
-              try {
-                const response = await github.rest.repos.getLatestRelease({
-                  owner: 'actions',
-                  repo: item.action
-                });
-
-                const latestVersion = response.data.tag_name.replace(/^v/, '');
-
-                if (item.version !== latestVersion) {
-                  results.push({
-                    action: item.action,
-                    current: item.version,
-                    latest: latestVersion
-                  });
-                }
-              } catch (e) {
-                console.log(`获取 ${item.action} 最新版本失败:`, e.message);
-              }
-            }
-
-            if (results.length === 0) {
-              console.log('所有 GitHub Actions 都已是最新版本');
-              return;
-            }
-
-            // 生成 Markdown 报告
-            let report = '## GitHub Actions 更新报告\n\n';
-            report += '检测到以下 actions 有可用更新：\n\n';
-            report += '| Action | 当前版本 | 最新版本 |\n';
-            report += '|--------|----------|----------|\n';
-
-            for (const r of results) {
-              report += `| ${r.action} | ${r.current} | ${r.latest} |\n`;
-            }
-
-            report += '\n---\n\n';
-            report += '### 更新步骤\n\n';
-            report += '1. 手动更新 `.github/workflows/` 目录下的 workflow 文件中的版本号\n';
-            report += '2. 提交更改\n\n';
-            report += '```bash\n';
-            for (const r of results) {
-              report += `# 更新 ${r.action}\nsed -i 's/actions\\/${r.action}@${r.current}/actions\\/${r.action}@${r.latest}/g' .github/workflows/*.yml\n`;
-            }
-            report += '# 提交\ngit add .github/workflows/*.yml\ngit commit -m "ci: 更新 GitHub Actions 版本"\ngit push\n';
-            report += '```\n';
-
-            // 写入 workflow summary
-            const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-            if (summaryPath) {
-              const fs = require('fs');
-              fs.writeFileSync(summaryPath, report);
-            }
-
-            console.log(`检测到 ${results.length} 个需要更新的 actions，已生成更新报告`);
+          set -euo pipefail
+          # 任何 uses: 引用都必须以 40 位十六进制 commit SHA 结尾。
+          rc=0
+          grep -RInE 'uses:[[:space:]]+[^[:space:]]+@[^[:space:]]+' .github > /tmp/uses.txt || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::无法扫描 .github（grep 退出码 $rc）。"
+            exit 1
+          fi
+          if grep -vE '@[0-9a-f]{40}([[:space:]]|$)' /tmp/uses.txt; then
+            echo "::error::GitHub Actions 必须固定到完整 commit SHA，请使用 Dependabot 更新。"
+            exit 1
+          fi
+          echo "所有 GitHub Actions 均已固定到 commit SHA。"

@@ -2,37 +2,44 @@ name: nodeseek Automatic Check-in
 
 on:
   schedule:
-    - cron: '59 23 * * *'  # 北京时间 00:00 (UTC+8)，对应UTC时间 16:00
+    # 北京时间 00:10（UTC+8）= 当日 16:10 UTC
+    # 刻意避开 00:00 整点：NodeSeek 每日签到计数在 00:00 重置，
+    # 整点触发可能落在重置生效前，导致当天仍按前一天的计数判定。
+    - cron: '10 16 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: write  # 添加写入Actions变量的权限
+
+concurrency:
+  group: nodeseek-checkin
+  cancel-in-progress: false
 
 jobs:
   run-nodeseek-sign:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: 检出代码仓库
-        uses: actions/checkout@v7
-      
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: 配置Python环境
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
-          python-version: '3.11.8'
+          python-version: '3.11'
 
       - name: 安装依赖包
         run: |
-          pip install curl_cffi requests --upgrade
-
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: 运行签到脚本
         env:
           # 基本账号
           USER: ${{ secrets.USER }}
           PASS: ${{ secrets.PASS }}
-          
+
           # 额外账号1-5
           USER1: ${{ secrets.USER1 }}
           PASS1: ${{ secrets.PASS1 }}
@@ -44,23 +51,30 @@ jobs:
           PASS4: ${{ secrets.PASS4 }}
           USER5: ${{ secrets.USER5 }}
           PASS5: ${{ secrets.PASS5 }}
-          
-          # Cookie配置
-          NS_COOKIE: ${{ vars.NS_COOKIE || secrets.NS_COOKIE }}
+
+          # Cookie 配置：只从加密 Secret 读取，禁止明文 Variable
+          NS_COOKIE: ${{ secrets.NS_COOKIE }}
           NS_RANDOM: ${{ secrets.NS_RANDOM }}
+          GH_COOKIE_WRITEBACK: ${{ secrets.GH_COOKIE_WRITEBACK || 'false' }}
+
           # 验证码配置
           SOLVER_TYPE: ${{ secrets.SOLVER_TYPE }}
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           CLIENT_KEY: ${{ secrets.CLIENT_KEY }}
-          
-          # GitHub API配置
+
+          # GitHub API 配置（仅用于加密回写 Secret）
           GH_PAT: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          
-          # 指纹配置
-          NS_IMPERSONATE: ${{ secrets.NS_IMPERSONATE || 'chrome110' }}
+
+          # 请求与指纹配置
+          TIMEOUT: ${{ secrets.TIMEOUT || '15' }}
+          NS_IMPERSONATE: ${{ secrets.NS_IMPERSONATE || 'chrome146' }}
+          NS_IMPERSONATE_ATTEMPTS: ${{ secrets.NS_IMPERSONATE_ATTEMPTS || '3' }}
+          MAX_LOGIN_ATTEMPTS: ${{ secrets.MAX_LOGIN_ATTEMPTS || '6' }}
+          STATS_MAX_PAGES: ${{ secrets.STATS_MAX_PAGES || '20' }}
 
           # 通知推送配置
+          NOTIFY_CONFIG_JSON: ${{ secrets.NOTIFY_CONFIG_JSON }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_USER_ID: ${{ secrets.TG_USER_ID }}
           TG_THREAD_ID: ${{ secrets.TG_THREAD_ID }}
