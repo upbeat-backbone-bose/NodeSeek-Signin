@@ -7,8 +7,7 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - Install: `python -m pip install -r requirements.txt -r requirements-dev.txt`. The dev file adds pytest, python-dotenv and MkDocs.
 - Configure: copy `.env.example` to `.env` (`Copy-Item .env.example .env` on PowerShell), then fill in real values.
 - Unit tests: `python -m pytest -q`. Tests must not access the network, solve captchas, or use real credentials.
-  `pytest-randomly` is installed, so test order varies per run; `tools/mutants.py` proves the
-  suite still fails when the implementation is deliberately broken.
+  `pytest-randomly` is installed, so test order varies per run.
 - `python test_run.py` loads `.env`, then launches `nodeseek_sign.py` as a subprocess. It has no assertions and performs live NodeSeek requests that can consume captcha credits; do not treat it as a unit test.
 - `python nodeseek_sign.py` runs one check-in cycle and exits non-zero if any account fails. It does **not** load `.env`.
 - `python scheduler.py` runs forever. If it starts inside a `RUN_AT` random window it runs immediately once; after each run it waits for the next day's window.
@@ -17,9 +16,9 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - Quality gates (dev-only, pinned in `requirements-dev.txt`): `ruff check .` (lint),
   `ruff format --check .` (format), `mypy --ignore-missing-imports config.py cookie_store.py
   nodeseek_sign.py notify.py scheduler.py turnstile_solver.py yescaptcha.py` (types),
-  `pip-audit -r requirements.txt` (supply chain). `bash tools/gauntlet.sh` reruns every
-  layer in sequence. Rule sets are pinned in `ruff.toml` so results do not drift with
-  the ruff version.
+  `pip-audit -r requirements.txt` (supply chain). Rule sets are pinned in `ruff.toml` so
+  results do not drift with the ruff version. The `quality` job in
+  `.github/workflows/tests.yml` runs all of them.
 
 ## Runtime layout
 
