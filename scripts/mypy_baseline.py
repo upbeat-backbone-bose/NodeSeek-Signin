@@ -34,7 +34,9 @@ TARGETS = [
     "yescaptcha.py",
 ]
 
-ERROR_RE = re.compile(r"^(?P<file>[^:]+):(?P<line>\d+): error: (?P<msg>.*?)  \[(?P<code>[\w-]+)\]")
+ERROR_RE = re.compile(
+    r"^(?P<file>[^:]+):(?P<line>\d+): error: (?P<msg>.*?)  \[(?P<code>[\w-]+)\]"
+)
 
 
 def collect_errors():
