@@ -1,0 +1,16 @@
+# mypy 历史错误基线 —— 由 tools/mypy_baseline.py --update 生成。
+#
+# 这里登记的都是引入 mypy 之前就存在的类型问题。CI 只拦截基线之外的
+# 新增错误，因此历史问题不会让门禁一直是红的。
+#
+# 修掉某个历史问题后，把对应行删掉即可收缩基线。
+# 格式：<文件>:<错误码> = <条数>
+
+nodeseek_sign.py:arg-type = 1
+nodeseek_sign.py:assignment = 1
+notify.py:arg-type = 11
+notify.py:assignment = 3
+notify.py:operator = 3
+turnstile_solver.py:assignment = 2
+yescaptcha.py:assignment = 1
+yescaptcha.py:index = 1

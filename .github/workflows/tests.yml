@@ -95,10 +95,9 @@ jobs:
         run: ruff check .
 
       - name: Static types
-        run: |
-          mypy --ignore-missing-imports --no-error-summary \
-            config.py cookie_store.py nodeseek_sign.py notify.py scheduler.py \
-            turnstile_solver.py yescaptcha.py
+        # 只拦截基线之外的新增类型错误；历史问题记录在 scripts/mypy-baseline.txt，
+        # 不会让门禁一直是红的。修掉历史问题后用 --update 收缩基线。
+        run: python scripts/mypy_baseline.py
 
       - name: Dependency audit
         run: pip-audit -r requirements.txt

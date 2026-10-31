@@ -14,10 +14,11 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - Docker: `docker compose up -d`; the container runs as UID/GID 1000 with `IN_DOCKER=true`.
 - Docs: `mkdocs serve`; CI runs `mkdocs build --strict`.
 - Quality gates (dev-only, pinned in `requirements-dev.txt`): `ruff check .` (lint),
-  `ruff format --check .` (format), `mypy --ignore-missing-imports config.py cookie_store.py
-  nodeseek_sign.py notify.py scheduler.py turnstile_solver.py yescaptcha.py` (types),
-  `pip-audit -r requirements.txt` (supply chain). Rule sets are pinned in `ruff.toml` so
-  results do not drift with the ruff version. The `quality` job in
+  `ruff format --check .` (format), `python scripts/mypy_baseline.py` (types — only
+  fails on errors **new** relative to `scripts/mypy-baseline.txt`; run it with
+  `--update` to shrink the baseline after fixing historic ones),
+  `pip-audit -r requirements.txt` (supply chain). Rule sets are pinned in `ruff.toml`
+  so results do not drift with the ruff version. The `quality` job in
   `.github/workflows/tests.yml` runs all of them.
 
 ## Runtime layout
@@ -49,7 +50,9 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - `.github/workflows/blank.yml` maps a fixed subset of secrets; add any new variable there explicitly. It installs `requirements.txt` and pins actions to full commit SHAs.
 - `blank.yml` cron is `10 16 * * *` (00:10 Asia/Shanghai). The offset avoids the 00:00 daily check-in counter reset.
 - Tests run on Python 3.11 and 3.14 via `.github/workflows/tests.yml`; keep code compatible with 3.11.
-  The same workflow also runs the `quality` job (ruff, mypy, pip-audit, mkdocs --strict).
+  The same workflow also runs the `quality` job (ruff, mypy baseline check, pip-audit,
+  mkdocs --strict). The mypy step uses `scripts/mypy_baseline.py`, so historic type
+  errors do not keep the gate red — but any **new** type error does fail CI.
 - The Cloudflare Worker has its own suite: `node --test "tests/*.test.mjs"` (`tests/worker.test.mjs`), using a stubbed global `fetch` and an in-memory KV binding. Run it after touching `nodeseek-cloudflare-worker.js`.
 - The Dockerfile uses `python:3.14.10-alpine3.24`, installs `requirements.txt`, copies `*.py`, runs as UID/GID 1000, and exposes a heartbeat-based healthcheck. A new non-Python runtime asset will not be present unless the Dockerfile changes.
 - The host `./cookie` bind mount must be writable by UID 1000.
