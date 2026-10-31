@@ -5,6 +5,15 @@
 __pycache__/
 *.pyc
 
+# Test tool caches (hypothesis example database, coverage data)
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 # Sensitive configuration
 .env
 

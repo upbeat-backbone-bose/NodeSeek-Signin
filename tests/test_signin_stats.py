@@ -68,8 +68,7 @@ class TestGetSigninStats:
         # 每一页都只含最近一天的数据，永远碰不到 30 天前的下界，
         # 因此循环会因页数上限退出 —— 此时数据是不完整的。
         pages = {
-            page: [_record(0)]
-            for page in range(1, nodeseek_sign.STATS_MAX_PAGES + 1)
+            page: [_record(0)] for page in range(1, nodeseek_sign.STATS_MAX_PAGES + 1)
         }
         _install(monkeypatch, pages)
 
@@ -96,8 +95,7 @@ class TestGetSigninStats:
 
     def test_stats_message_mentions_incomplete_data(self, monkeypatch):
         pages = {
-            page: [_record(0)]
-            for page in range(1, nodeseek_sign.STATS_MAX_PAGES + 1)
+            page: [_record(0)] for page in range(1, nodeseek_sign.STATS_MAX_PAGES + 1)
         }
         _install(monkeypatch, pages)
 

@@ -47,9 +47,17 @@ def test_turnstile_stops_on_terminal_status(monkeypatch):
 def test_turnstile_returns_token(monkeypatch):
     responses = [
         FakeResponse({"errorId": 0, "taskId": "task-1"}),
-        FakeResponse({"errorId": 0, "status": "completed", "result": {"response": {"token": "tok"}}}),
+        FakeResponse(
+            {
+                "errorId": 0,
+                "status": "completed",
+                "result": {"response": {"token": "tok"}},
+            }
+        ),
     ]
-    monkeypatch.setattr(turnstile_solver.requests, "post", lambda *a, **k: responses.pop(0))
+    monkeypatch.setattr(
+        turnstile_solver.requests, "post", lambda *a, **k: responses.pop(0)
+    )
     solver = turnstile_solver.TurnstileSolver("https://api.example.com", "key")
     assert solver.solve("https://example.com", "sitekey") == "tok"
 
@@ -60,7 +68,9 @@ def test_turnstile_returns_token_from_ready_solution(monkeypatch):
         FakeResponse({"errorId": 0, "taskId": "task-1"}),
         FakeResponse({"errorId": 0, "status": "ready", "solution": {"token": "tok"}}),
     ]
-    monkeypatch.setattr(turnstile_solver.requests, "post", lambda *a, **k: responses.pop(0))
+    monkeypatch.setattr(
+        turnstile_solver.requests, "post", lambda *a, **k: responses.pop(0)
+    )
     solver = turnstile_solver.TurnstileSolver("https://api.example.com", "key")
     assert solver.solve("https://example.com", "sitekey") == "tok"
 
@@ -97,6 +107,34 @@ def test_yescaptcha_stops_on_terminal_error(monkeypatch):
     # 真实原因必须透出，不能被吞成 None。
     assert "bad key" in str(excinfo.value)
     assert len(calls) == 1
+
+
+def test_yescaptcha_create_task_surfaces_api_error(monkeypatch):
+    """创建任务时 API 返回 errorId 必须抛异常并透出原因，不能静默返回 None。"""
+    monkeypatch.setattr(
+        yescaptcha.requests,
+        "post",
+        lambda *a, **k: FakeResponse(
+            {"errorId": 7, "errorDescription": "余额不足"}
+        ),
+    )
+    solver = yescaptcha.YesCaptchaSolver("https://api.example.com", "key")
+    with pytest.raises(yescaptcha.YesCaptchaSolverError) as excinfo:
+        solver._create_task("https://example.com", "sitekey")
+    assert "余额不足" in str(excinfo.value)
+
+
+def test_yescaptcha_create_task_requires_task_id(monkeypatch):
+    """API 返回成功但没有 taskId 时必须抛异常，不能返回 None 当作失败。"""
+    monkeypatch.setattr(
+        yescaptcha.requests,
+        "post",
+        lambda *a, **k: FakeResponse({"errorId": 0}),
+    )
+    solver = yescaptcha.YesCaptchaSolver("https://api.example.com", "key")
+    with pytest.raises(yescaptcha.YesCaptchaSolverError) as excinfo:
+        solver._create_task("https://example.com", "sitekey")
+    assert "taskId" in str(excinfo.value)
 
 
 def test_yescaptcha_reports_http_status_on_create(monkeypatch):

@@ -1,5 +1,3 @@
-import pytest
-
 import nodeseek_sign
 
 
@@ -19,9 +17,15 @@ def test_sign_without_cookie_is_invalid():
 
 def test_sign_success(monkeypatch):
     def fake_request(*args, **kwargs):
-        return FakeResponse(payload={"success": True, "message": "获得 5 个鸡腿"}), "chrome146", None
+        return (
+            FakeResponse(payload={"success": True, "message": "获得 5 个鸡腿"}),
+            "chrome146",
+            None,
+        )
 
-    monkeypatch.setattr(nodeseek_sign, "_request_with_impersonate_fallback", fake_request)
+    monkeypatch.setattr(
+        nodeseek_sign, "_request_with_impersonate_fallback", fake_request
+    )
     status, message = nodeseek_sign.sign("session=abc", "false")
     assert status == "success"
     assert "鸡腿" in message
@@ -31,7 +35,11 @@ def test_sign_already_checked_in(monkeypatch):
     monkeypatch.setattr(
         nodeseek_sign,
         "_request_with_impersonate_fallback",
-        lambda *a, **k: (FakeResponse(payload={"message": "今日已完成签到"}), "chrome146", None),
+        lambda *a, **k: (
+            FakeResponse(payload={"message": "今日已完成签到"}),
+            "chrome146",
+            None,
+        ),
     )
     assert nodeseek_sign.sign("session=abc", "false")[0] == "already"
 
@@ -56,7 +64,9 @@ def test_sign_reward_wins_over_already(monkeypatch):
         nodeseek_sign,
         "_request_with_impersonate_fallback",
         lambda *a, **k: (
-            FakeResponse(payload={"success": True, "message": "今日已完成签到，获得 5 个鸡腿"}),
+            FakeResponse(
+                payload={"success": True, "message": "今日已完成签到，获得 5 个鸡腿"}
+            ),
             "chrome146",
             None,
         ),
@@ -82,7 +92,11 @@ def test_sign_404_status_is_invalid(monkeypatch):
     monkeypatch.setattr(
         nodeseek_sign,
         "_request_with_impersonate_fallback",
-        lambda *a, **k: (FakeResponse(payload={"status": 404, "message": "ok"}), "chrome146", None),
+        lambda *a, **k: (
+            FakeResponse(payload={"status": 404, "message": "ok"}),
+            "chrome146",
+            None,
+        ),
     )
     assert nodeseek_sign.sign("session=abc", "false")[0] == "invalid"
 
@@ -91,7 +105,11 @@ def test_sign_unauthorized_message_is_invalid(monkeypatch):
     monkeypatch.setattr(
         nodeseek_sign,
         "_request_with_impersonate_fallback",
-        lambda *a, **k: (FakeResponse(payload={"status": 200, "message": "未登录"}), "chrome146", None),
+        lambda *a, **k: (
+            FakeResponse(payload={"status": 200, "message": "未登录"}),
+            "chrome146",
+            None,
+        ),
     )
     assert nodeseek_sign.sign("session=abc", "false")[0] == "invalid"
 
@@ -113,7 +131,11 @@ def test_sign_rate_limited_is_error(monkeypatch):
     monkeypatch.setattr(
         nodeseek_sign,
         "_request_with_impersonate_fallback",
-        lambda *a, **k: (FakeResponse(status_code=429, text="", payload={}), "chrome146", None),
+        lambda *a, **k: (
+            FakeResponse(status_code=429, text="", payload={}),
+            "chrome146",
+            None,
+        ),
     )
     assert nodeseek_sign.sign("session=abc", "false")[0] == "error"
 
@@ -223,7 +245,9 @@ def test_reported_fingerprint_matches_failed_request(monkeypatch):
 
 def test_candidate_list_is_bounded():
     assert 1 <= len(nodeseek_sign.IMPERSONATE_CANDIDATES) <= 5
-    assert len(nodeseek_sign.IMPERSONATE_CANDIDATES) <= nodeseek_sign.IMPERSONATE_ATTEMPTS
+    assert (
+        len(nodeseek_sign.IMPERSONATE_CANDIDATES) <= nodeseek_sign.IMPERSONATE_ATTEMPTS
+    )
 
 
 def test_candidates_are_supported_by_installed_curl_cffi():

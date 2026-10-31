@@ -9,7 +9,6 @@
   - 账号数与 Cookie 数不一致时应给出告警。
 """
 
-import io
 import json
 import os
 
@@ -67,7 +66,7 @@ def _parse_result(capsys):
     out = capsys.readouterr().out
     for line in out.splitlines():
         if line.startswith("RESULT "):
-            return json.loads(line[len("RESULT "):])
+            return json.loads(line[len("RESULT ") :])
     raise AssertionError(f"未找到 RESULT 输出:\n{out}")
 
 
@@ -205,14 +204,10 @@ class TestRunDoesNotBuyCaptchaOnTransientFailures:
         assert exit_code == 1
 
     def test_forbidden_does_not_trigger_paid_login(self, monkeypatch, capsys):
-        self._assert_no_login(
-            monkeypatch, capsys, ("forbidden", "403 Forbidden")
-        )
+        self._assert_no_login(monkeypatch, capsys, ("forbidden", "403 Forbidden"))
 
     def test_server_error_does_not_trigger_paid_login(self, monkeypatch, capsys):
-        self._assert_no_login(
-            monkeypatch, capsys, ("error", "服务端错误 (500)")
-        )
+        self._assert_no_login(monkeypatch, capsys, ("error", "服务端错误 (500)"))
 
 
 class TestRunAlreadyCounting:
@@ -250,9 +245,9 @@ class TestRunNotification:
         sent = {}
         monkeypatch.setattr(nodeseek_sign, "hadsend", True)
         monkeypatch.setattr(
-            nodeseek_sign, "send", lambda title, content: sent.update(
-                title=title, content=content
-            )
+            nodeseek_sign,
+            "send",
+            lambda title, content: sent.update(title=title, content=content),
         )
 
         nodeseek_sign.run()
@@ -351,9 +346,7 @@ class TestRunCookiePersistence:
             return ("invalid", "未登录") if cookie == "c1" else ("success", "ok")
 
         monkeypatch.setattr(nodeseek_sign, "sign", fake_sign)
-        monkeypatch.setattr(
-            nodeseek_sign, "session_login", lambda *a, **k: "fresh1"
-        )
+        monkeypatch.setattr(nodeseek_sign, "session_login", lambda *a, **k: "fresh1")
 
         exit_code = nodeseek_sign.run()
         out = capsys.readouterr().out
