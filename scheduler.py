@@ -233,16 +233,22 @@ def _acquire_lock() -> bool:
         print(f"无法创建调度器锁文件: {type(exc).__name__}", flush=True)
         return False
 
-    try:
-        import fcntl
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except ImportError:
-        pass
-    except OSError:
-        print("另一个调度器实例正在运行，退出。", flush=True)
-        handle.close()
-        return False
+    # 单实例锁只在 POSIX 上有意义：Windows 没有 fcntl，直接放行。
+    # 这里必须显式判断平台，不能只靠 ImportError —— 某些平台可能有
+    # fcntl 模块却没有 flock（那样会抛 AttributeError 而不是 ImportError，
+    # 导致调度器直接崩溃）。
+    if sys.platform != "win32":
+        try:
+            import fcntl
+        except ImportError:
+            pass
+        else:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                print("另一个调度器实例正在运行，退出。", flush=True)
+                handle.close()
+                return False
 
     _lock_handle = handle
     return True

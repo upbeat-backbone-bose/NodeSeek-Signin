@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import requests as py_requests
@@ -131,7 +132,7 @@ def detect_environment():
 
 
 # ---------------- GitHub Secret 写入函数 ----------------
-def save_cookie_to_github_secret(var_name: str, cookie: str) -> bool:
+def save_cookie_to_github_secret(var_name: str, cookie: str) -> Optional[bool]:
     """通过 GitHub Secrets API 加密更新 Cookie。
 
     仅当 GH_COOKIE_WRITEBACK=true 时启用，避免默认把会话凭据写入
@@ -176,7 +177,7 @@ def save_cookie_to_github_secret(var_name: str, cookie: str) -> bool:
         key_data = key_response.json()
 
         public_key = public.PublicKey(
-            key_data["key"].encode("utf-8"), encoding.Base64Encoder()
+            key_data["key"].encode("utf-8"), encoding.Base64Encoder
         )
         sealed_box = public.SealedBox(public_key)
         encrypted = base64.b64encode(
@@ -417,7 +418,7 @@ def _request_with_impersonate_fallback(
     *,
     headers: dict,
     json_data=None,
-    timeout: int = None,
+    timeout: Optional[int] = None,
 ):
     """发送请求，只为明确的 Cloudflare 挑战切换有限的备用指纹。
 
@@ -428,7 +429,7 @@ def _request_with_impersonate_fallback(
     candidates = _get_impersonate_candidates()
     deadline = time.monotonic() + timeout * max(1, len(candidates))
     last_resp = None
-    last_err = None
+    last_err: Optional[BaseException] = None
     # 记录最后一次实际发出的请求所用的指纹，供错误消息排障使用。
     used = IMPERSONATE_VERSION
 

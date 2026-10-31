@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.parse
 import smtplib
+from typing import Any, Dict, Optional
 from email.mime.text import MIMEText
 from email.header import Header
 from email.utils import formataddr
@@ -19,7 +20,7 @@ from email.utils import formataddr
 try:
     import requests
 except ImportError:  # optional dependency
-    requests = None
+    requests = None  # type: ignore[assignment]
 
 from config import (
     DEBUG_MODE,
@@ -68,7 +69,7 @@ def print(text, *args, **kw):
 
 # 通知服务
 # fmt: off
-push_config = {
+push_config: Dict[str, Any] = {
     'HITOKOTO': True,                  # 启用一言（随机句子）
 
     'BARK_PUSH': '',                    # bark IP 或设备码，例：https://api.day.app/DxHcxxxxxRxxxxxxcm/
@@ -190,10 +191,11 @@ def bark(title: str, content: str) -> None:
         return
     print("bark 服务启动")
 
-    if push_config.get("BARK_PUSH").startswith("http"):
-        url = f'{push_config.get("BARK_PUSH")}/{urllib.parse.quote_plus(title)}/{urllib.parse.quote_plus(content)}'
+    bark_push = str(push_config.get("BARK_PUSH") or "")
+    if bark_push.startswith("http"):
+        url = f'{bark_push}/{urllib.parse.quote_plus(title)}/{urllib.parse.quote_plus(content)}'
     else:
-        url = f'https://api.day.app/{push_config.get("BARK_PUSH")}/{urllib.parse.quote_plus(title)}/{urllib.parse.quote_plus(content)}'
+        url = f'https://api.day.app/{bark_push}/{urllib.parse.quote_plus(title)}/{urllib.parse.quote_plus(content)}'
 
     bark_params = {
         "BARK_ARCHIVE": "isArchive",
@@ -242,8 +244,9 @@ def dingding_bot(title: str, content: str) -> None:
     print("钉钉机器人 服务启动")
 
     timestamp = str(round(time.time() * 1000))
-    secret_enc = push_config.get("DD_BOT_SECRET").encode("utf-8")
-    string_to_sign = "{}\n{}".format(timestamp, push_config.get("DD_BOT_SECRET"))
+    secret = str(push_config.get("DD_BOT_SECRET") or "")
+    secret_enc = secret.encode("utf-8")
+    string_to_sign = "{}\n{}".format(timestamp, secret)
     string_to_sign_enc = string_to_sign.encode("utf-8")
     hmac_code = hmac.new(
         secret_enc, string_to_sign_enc, digestmod=hashlib.sha256
@@ -367,10 +370,11 @@ def serverJ(title: str, content: str) -> None:
     print("serverJ 服务启动")
 
     data = {"text": title, "desp": content.replace("\n", "\n\n")}
-    if push_config.get("PUSH_KEY").find("SCT") != -1:
-        url = f'https://sctapi.ftqq.com/{push_config.get("PUSH_KEY")}.send'
+    push_key = str(push_config.get("PUSH_KEY") or "")
+    if push_key.find("SCT") != -1:
+        url = f'https://sctapi.ftqq.com/{push_key}.send'
     else:
-        url = f'https://sc.ftqq.com/{push_config.get("PUSH_KEY")}.send'
+        url = f'https://sc.ftqq.com/{push_key}.send'
     response = requests.post(url, data=data, timeout=REQUEST_TIMEOUT).json()
 
     if response.get("errno") == 0 or response.get("code") == 0:
@@ -810,7 +814,7 @@ def smtp(title: str, content: str) -> None:
 
     use_ssl = _config_bool(push_config.get("SMTP_SSL", "true"))
     host, port = _parse_smtp_server(push_config.get("SMTP_SERVER"), use_ssl)
-    smtp_server = None
+    smtp_server: Optional[smtplib.SMTP] = None
 
     try:
         if use_ssl:
@@ -952,7 +956,8 @@ def parse_string(input_string, value_format_fn=None):
             value = value_format_fn(value) if value_format_fn else value
             json_value = json.loads(value)
             matches[key] = json_value
-        except:
+        except (ValueError, TypeError):
+            # 不是合法 JSON 就按原样保留；不吞掉 KeyboardInterrupt 等。
             matches[key] = value
     return matches
 
@@ -987,7 +992,7 @@ def custom_notify(title: str, content: str) -> None:
 
     print("自定义通知服务启动")
 
-    WEBHOOK_URL = push_config.get("WEBHOOK_URL")
+    WEBHOOK_URL = str(push_config.get("WEBHOOK_URL") or "")
     WEBHOOK_METHOD = str(push_config.get("WEBHOOK_METHOD") or "").upper()
     WEBHOOK_CONTENT_TYPE = push_config.get("WEBHOOK_CONTENT_TYPE")
     WEBHOOK_BODY = push_config.get("WEBHOOK_BODY")
@@ -1106,7 +1111,7 @@ def add_notify_function():
         notify_function.append(custom_notify)
 
     if not notify_function:
-        print(f"无推送渠道，请检查通知变量是否正确")
+        print("无推送渠道，请检查通知变量是否正确")
     return notify_function
 
 
