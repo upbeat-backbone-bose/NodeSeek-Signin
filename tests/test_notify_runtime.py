@@ -7,6 +7,8 @@ import io
 import threading
 from contextlib import redirect_stdout
 
+import pytest
+
 import notify
 
 
@@ -148,3 +150,47 @@ class TestOptionalRequests:
         """缺少 requests 时一言返回空字符串，不影响主通知。"""
         monkeypatch.setattr(notify, "requests", None)
         assert notify.one() == ""
+
+    @pytest.mark.parametrize(
+        "channel_name",
+        [
+            "bark",
+            "dingding_bot",
+            "feishu_bot",
+            "go_cqhttp",
+            "gotify",
+            "iGot",
+            "serverJ",
+            "pushdeer",
+            "chat",
+            "pushplus_bot",
+            "weplus_bot",
+            "qmsg_bot",
+            "wecom_app",
+            "wecom_bot",
+            "telegram_bot",
+            "aibotk",
+            "pushme",
+            "chronocat",
+            "custom_notify",
+        ],
+    )
+    def test_every_http_channel_guards_against_missing_requests(
+        self, monkeypatch, capsys, channel_name
+    ):
+        """每个 HTTP 渠道都必须有 requests 缺失守卫，且给出可读提示。
+
+        这条守卫是本次变更给 19 个渠道逐个加的 —— 逐个加的代码必须逐个验证，
+        否则新增渠道时漏加一个就会在缺依赖的机器上直接 AttributeError。
+        """
+        monkeypatch.setattr(notify, "requests", None)
+        # 把该渠道的必填配置补齐，确保走到守卫之后才失败。
+        for key in list(notify.push_config):
+            if isinstance(notify.push_config[key], str):
+                monkeypatch.setitem(notify.push_config, key, "x")
+
+        channel = getattr(notify, channel_name)
+        channel("标题", "内容")
+
+        out = capsys.readouterr().out
+        assert "requests" in out, f"{channel_name} 缺少 requests 缺失守卫"

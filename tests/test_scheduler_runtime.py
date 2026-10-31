@@ -119,6 +119,57 @@ class TestRunCheckinTask:
 
         assert scheduler.run_checkin_task() is False
 
+    def test_popen_exception_returns_false(self, monkeypatch):
+        """启动子进程时抛异常必须报告失败，而不是让调度器崩溃。"""
+
+        def boom(*a, **k):
+            raise OSError("no fork")
+
+        monkeypatch.setattr(scheduler.subprocess, "Popen", boom)
+
+        assert scheduler.run_checkin_task() is False
+
+    def test_stop_signal_terminates_the_child(self, monkeypatch):
+        """停止信号到达时必须终止子进程并返回失败。"""
+        monkeypatch.setattr(scheduler, "_stop_requested", False)
+        terminated = []
+
+        class FakeProcess:
+            returncode = None
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                terminated.append("terminate")
+
+            def kill(self):
+                terminated.append("kill")
+                self.returncode = -15
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        monkeypatch.setattr(
+            scheduler.subprocess, "Popen", lambda *a, **k: FakeProcess()
+        )
+
+        # 让第二次 poll 后停止标志置位，模拟收到停止信号。
+        state = {"calls": 0}
+
+        def poll_with_stop(self):
+            state["calls"] += 1
+            if state["calls"] >= 2:
+                scheduler._stop_requested = True
+            return None
+
+        FakeProcess.poll = poll_with_stop
+
+        result = scheduler.run_checkin_task()
+
+        assert result is False
+        assert "terminate" in terminated
+
     def test_real_child_process_runs_and_exits(self, tmp_path):
         """真实执行：子进程确实被拉起并跑完（不是只有桩能跑通）。"""
         marker = tmp_path / "ran.txt"

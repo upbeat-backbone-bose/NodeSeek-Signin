@@ -114,9 +114,7 @@ def test_yescaptcha_create_task_surfaces_api_error(monkeypatch):
     monkeypatch.setattr(
         yescaptcha.requests,
         "post",
-        lambda *a, **k: FakeResponse(
-            {"errorId": 7, "errorDescription": "余额不足"}
-        ),
+        lambda *a, **k: FakeResponse({"errorId": 7, "errorDescription": "余额不足"}),
     )
     solver = yescaptcha.YesCaptchaSolver("https://api.example.com", "key")
     with pytest.raises(yescaptcha.YesCaptchaSolverError) as excinfo:
