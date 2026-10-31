@@ -7,12 +7,19 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - Install: `python -m pip install -r requirements.txt -r requirements-dev.txt`. The dev file adds pytest, python-dotenv and MkDocs.
 - Configure: copy `.env.example` to `.env` (`Copy-Item .env.example .env` on PowerShell), then fill in real values.
 - Unit tests: `python -m pytest -q`. Tests must not access the network, solve captchas, or use real credentials.
+  `pytest-randomly` is installed, so test order varies per run; `tools/mutants.py` proves the
+  suite still fails when the implementation is deliberately broken.
 - `python test_run.py` loads `.env`, then launches `nodeseek_sign.py` as a subprocess. It has no assertions and performs live NodeSeek requests that can consume captcha credits; do not treat it as a unit test.
 - `python nodeseek_sign.py` runs one check-in cycle and exits non-zero if any account fails. It does **not** load `.env`.
 - `python scheduler.py` runs forever. If it starts inside a `RUN_AT` random window it runs immediately once; after each run it waits for the next day's window.
 - Docker: `docker compose up -d`; the container runs as UID/GID 1000 with `IN_DOCKER=true`.
 - Docs: `mkdocs serve`; CI runs `mkdocs build --strict`.
-- No linter, formatter, or typechecker is configured. Do not invent commands for them.
+- Quality gates (dev-only, pinned in `requirements-dev.txt`): `ruff check .` (lint),
+  `ruff format --check .` (format), `mypy --ignore-missing-imports config.py cookie_store.py
+  nodeseek_sign.py notify.py scheduler.py turnstile_solver.py yescaptcha.py` (types),
+  `pip-audit -r requirements.txt` (supply chain). `bash tools/gauntlet.sh` reruns every
+  layer in sequence. Rule sets are pinned in `ruff.toml` so results do not drift with
+  the ruff version.
 
 ## Runtime layout
 
@@ -43,6 +50,7 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - `.github/workflows/blank.yml` maps a fixed subset of secrets; add any new variable there explicitly. It installs `requirements.txt` and pins actions to full commit SHAs.
 - `blank.yml` cron is `10 16 * * *` (00:10 Asia/Shanghai). The offset avoids the 00:00 daily check-in counter reset.
 - Tests run on Python 3.11 and 3.14 via `.github/workflows/tests.yml`; keep code compatible with 3.11.
+  The same workflow also runs the `quality` job (ruff, mypy, pip-audit, mkdocs --strict).
 - The Cloudflare Worker has its own suite: `node --test "tests/*.test.mjs"` (`tests/worker.test.mjs`), using a stubbed global `fetch` and an in-memory KV binding. Run it after touching `nodeseek-cloudflare-worker.js`.
 - The Dockerfile uses `python:3.14.10-alpine3.24`, installs `requirements.txt`, copies `*.py`, runs as UID/GID 1000, and exposes a heartbeat-based healthcheck. A new non-Python runtime asset will not be present unless the Dockerfile changes.
 - The host `./cookie` bind mount must be writable by UID 1000.

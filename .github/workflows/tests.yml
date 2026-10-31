@@ -72,3 +72,37 @@ jobs:
       - name: Run Worker tests
         run: node --test "tests/*.test.mjs"
 
+  quality:
+    # 静态类型与 lint：这两层曾长期缺失，导致新增的类型错误无人拦截。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Static types
+        run: |
+          mypy --ignore-missing-imports --no-error-summary \
+            config.py cookie_store.py nodeseek_sign.py notify.py scheduler.py \
+            turnstile_solver.py yescaptcha.py
+
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+
+      - name: Documentation build
+        run: mkdocs build --strict
+
