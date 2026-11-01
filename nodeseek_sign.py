@@ -47,6 +47,53 @@ def _mask_string(s: str, show_start: int = 2, show_end: int = 2) -> str:
     return s[:show_start] + "*" * (len(s) - show_start - show_end) + s[-show_end:]
 
 
+# 内部状态码 -> 用户可读说明。RESULT JSON 里仍保留原始状态码（机器契约），
+# 通知与终端输出用这份中文说明。
+_STATUS_LABELS = {
+    "success": "签到成功",
+    "already": "今日已签到",
+    "invalid": "Cookie 已失效",
+    "forbidden": "被拦截（需重新登录）",
+    "fail": "签到失败",
+    "error": "请求异常",
+}
+
+# 只有这些失败原因由本仓库自己生成，可以安全地透出给用户。
+# 服务端响应体里的 message 属于不可信内容，一律不透出
+# （见 commit 1f75509：移除响应内容与异常对象的明文输出）。
+_SAFE_FAILURE_REASONS = frozenset(
+    {
+        "请求异常",
+        "请求失败：无响应",
+        "请求过于频繁 (429)",
+        "签到请求异常",
+        "无Cookie",
+    }
+)
+
+
+def _is_safe_failure_reason(reason: str) -> bool:
+    """判断失败原因是否由本仓库生成、可以安全透出。"""
+    if not reason:
+        return False
+    if reason in _SAFE_FAILURE_REASONS:
+        return True
+    # "服务端错误 (500)" 这类由本仓库格式化出来的原因。
+    return reason.startswith("服务端错误 (")
+
+
+def _describe_status(result: str, msg: str = "") -> str:
+    """把内部状态码翻译成一句用户能看懂的话。
+
+    原因只有在由本仓库生成时才附加；服务端返回的原文不透出。
+    """
+    label = _STATUS_LABELS.get(result, result)
+    reason = (msg or "").strip()
+    if _is_safe_failure_reason(reason):
+        return f"{label}（{reason}）"
+    return label
+
+
 # ---------------- impersonate 指纹 ----------------
 DEFAULT_IMPERSONATE = "chrome146"
 # curl_cffi 0.17.0 支持的常用桌面指纹，仅作为 Cloudflare 挑战时的有限回退。
@@ -779,8 +826,11 @@ def run() -> int:
 
         display_user = user if user else f"账号{account_index}"
         masked_user = _mask_string(display_user, 2, 1) if user else display_user
+        # 展示用的账号名：未配置用户名时已经是"账号N"，不再套一层"账号 "，
+        # 否则会出现"账号 账号1"这种重复前缀。
+        account_label = masked_user if not user else f"账号 {masked_user}"
 
-        print(f"\n==== 账号 {masked_user} 开始签到 ====")
+        print(f"\n==== {account_label} 开始签到 ====")
         started = time.monotonic()
 
         misaligned_slot = False
@@ -797,7 +847,7 @@ def run() -> int:
         stats = None
         if result in ("success", "already"):
             _debug_print(f"签到结果: {msg}")
-            print(f"账号 {masked_user} 签到成功")
+            print(f"{account_label} 签到成功")
 
             print("正在查询签到收益统计...")
             stats, stats_msg = get_signin_stats(cookie, 30)
@@ -808,7 +858,7 @@ def run() -> int:
                 print("统计查询失败")
         else:
             _debug_print(f"签到失败或 Cookie 无效: {msg}")
-            print("签到失败或 Cookie 无效")
+            print(f"{account_label} 签到失败: {_describe_status(result, msg)}")
 
             # 只有明确的 Cookie 失效才重新登录并购买验证码。
             # 网络错误、Cloudflare 403、服务端 5xx 不应触发付费求解。
@@ -817,7 +867,7 @@ def run() -> int:
             elif result != "invalid":
                 print("非 Cookie 失效问题，跳过重新登录以避免不必要的验证码消耗")
             elif not (user and password):
-                print(f"账号 {masked_user} 无法重新登录: 未配置用户名或密码")
+                print(f"{account_label} 无法重新登录: 未配置用户名或密码")
             elif login_attempts >= max_logins:
                 print("本次运行已达到最大登录尝试次数，跳过重新登录")
             elif not client_key:
@@ -829,13 +879,13 @@ def run() -> int:
                     user, password, solver_type, api_base_url, client_key
                 )
                 if not new_cookie:
-                    print(f"账号 {masked_user} 登录失败，无法获取新 Cookie")
+                    print(f"{account_label} 登录失败，无法获取新 Cookie")
                 else:
                     print("登录成功，使用新 Cookie 重新签到...")
                     result, msg = sign(new_cookie, ns_random)
                     if result in ("success", "already"):
                         _debug_print(f"签到结果: {msg}")
-                        print(f"账号 {masked_user} 签到成功")
+                        print(f"{account_label} 签到成功")
                         cookie_list[i] = new_cookie
                         cookies_updated = True
 
@@ -851,23 +901,25 @@ def run() -> int:
                         save_cookie("NS_COOKIE", join_cookies(cookie_list))
                     else:
                         _debug_print(f"重新签到失败: {msg}")
-                        print(f"账号 {masked_user} 重新签到仍然失败")
+                        print(f"{account_label} 重新签到仍然失败")
 
         elapsed = round(time.monotonic() - started, 1)
         success = result in ("success", "already")
+        description = _describe_status(result, msg)
         results.append(
             {
                 "account": masked_user,
                 "status": result,
+                "message": description,
                 "elapsed_seconds": elapsed,
             }
         )
 
-        line = f"账号 {masked_user}: {'✅' if success else '❌'} {result}"
+        line = f"{account_label}: {'✅' if success else '❌'} {description}"
         if stats:
             line += f"（{_stats_message(stats)}）"
         summary_lines.append(line)
-        print(f"账号 {masked_user} 完成，耗时 {elapsed}s")
+        print(f"{account_label} 完成，耗时 {elapsed}s")
 
     if cookies_updated and cookie_list:
         print("\n==== 处理完毕，保存更新后的 Cookie ====")

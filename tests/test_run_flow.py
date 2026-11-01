@@ -252,8 +252,12 @@ class TestRunNotification:
 
         nodeseek_sign.run()
         assert sent["title"] == "NodeSeek 签到"
-        assert "账号 账号1" in sent["content"]
-        assert "账号 账号2" in sent["content"]
+        # 账号标签不重复前缀："账号1" 而非 "账号 账号1"。
+        assert "账号1" in sent["content"]
+        assert "账号2" in sent["content"]
+        assert "账号 账号1" not in sent["content"]
+        # 状态用可读中文，而不是内部枚举。
+        assert "签到成功" in sent["content"]
 
     def test_truncated_stats_are_labelled(self, monkeypatch, capsys):
         """统计被截断时必须在展示中标注出来。"""
