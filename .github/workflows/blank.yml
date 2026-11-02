@@ -79,4 +79,4 @@ jobs:
           TG_USER_ID: ${{ secrets.TG_USER_ID }}
           TG_THREAD_ID: ${{ secrets.TG_THREAD_ID }}
 
-        run: python .github/workflows/diag_probe.py
+        run: python nodeseek_sign.py

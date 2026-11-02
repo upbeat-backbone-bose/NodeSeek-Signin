@@ -597,19 +597,23 @@ async function sign(cookie) {
       }
     );
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    // 状态码与响应体要一起看，不能只看其中一个。
+    //
+    // 实测（2026-11-01）：同一天重复签到时，接口返回的是
+    // HTTP 500 + {"success": false, "message": "今天已完成签到，请勿重复操作"}。
+    // 5xx 并不等于"服务端故障"，正文里可能带着确定性结论。
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
     }
-
-    const data = await response.json();
-    const msg = data.message || '';
+    const msg = data && typeof data.message === 'string' ? data.message : '';
 
     // 判定顺序：先看消息里的明确信号，最后才回退到通用的 success 标志。
     //   - "鸡腿"：本次确实拿到了奖励，属于新签到。
     //   - "已完成签到"：今日已签，需单独计数。若接口同时返回 success=true，
     //     先前的顺序会让 "already" 永远不会被统计。
-    //   - 404 / "请先登录" / "未登录"：会话失效，需重新登录，
-    //     且要优先于 success 标志。
     if (msg.includes('鸡腿')) {
       return { success: true, already: false, needLogin: false, message: msg };
     }
@@ -618,11 +622,23 @@ async function sign(cookie) {
       return { success: true, already: true, needLogin: false, message: msg };
     }
 
-    if (data.status === 404 || msg.includes('请先登录') || msg.includes('未登录')) {
+    // 5xx/429 不代表 Cookie 失效，绝不能判成 needLogin：
+    // 那会为一次服务端故障购买验证码。
+    if (!response.ok) {
+      return { success: false, needLogin: false, message: `HTTP ${response.status}` };
+    }
+
+    //   - 404 / "请先登录" / "未登录"：会话失效，需重新登录，
+    //     且要优先于 success 标志。
+    if (
+      (data && data.status === 404) ||
+      msg.includes('请先登录') ||
+      msg.includes('未登录')
+    ) {
       return { success: false, needLogin: true, message: 'Cookie已失效' };
     }
 
-    if (data.success) {
+    if (data && data.success) {
       return { success: true, already: false, needLogin: false, message: msg };
     }
 

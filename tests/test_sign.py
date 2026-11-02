@@ -153,6 +153,109 @@ def test_sign_5xx_is_error(monkeypatch):
     assert nodeseek_sign.sign("session=abc", "false")[0] == "error"
 
 
+def test_sign_5xx_with_already_body_is_already(monkeypatch):
+    """接口用 500 表达"今天已完成签到"时，必须判为 already 而不是失败。
+
+    实测（2026-11-01）：同一天重复签到返回
+    HTTP 500 + {"success": false, "message": "今天已完成签到，请勿重复操作"}。
+    """
+    monkeypatch.setattr(
+        nodeseek_sign,
+        "_request_with_impersonate_fallback",
+        lambda *a, **k: (
+            FakeResponse(
+                status_code=500,
+                text="",
+                payload={"success": False, "message": "今天已完成签到，请勿重复操作"},
+            ),
+            "chrome146",
+            None,
+        ),
+    )
+    status, message = nodeseek_sign.sign("session=abc", "false")
+    assert status == "already"
+    assert "已完成签到" in message
+
+
+def test_sign_5xx_with_reward_body_is_success(monkeypatch):
+    """500 正文里带"鸡腿"时说明奖励已发放，应判为 success。"""
+    monkeypatch.setattr(
+        nodeseek_sign,
+        "_request_with_impersonate_fallback",
+        lambda *a, **k: (
+            FakeResponse(
+                status_code=500,
+                text="",
+                payload={"success": True, "message": "签到成功，获得 5 个鸡腿"},
+            ),
+            "chrome146",
+            None,
+        ),
+    )
+    status, _message = nodeseek_sign.sign("session=abc", "false")
+    assert status == "success"
+
+
+def test_sign_5xx_with_login_prompt_is_not_invalid(monkeypatch):
+    """5xx 正文即使提到未登录，也不能判成 invalid。
+
+    invalid 会触发重新登录并购买验证码；服务端故障不该花钱。
+    """
+    monkeypatch.setattr(
+        nodeseek_sign,
+        "_request_with_impersonate_fallback",
+        lambda *a, **k: (
+            FakeResponse(
+                status_code=500,
+                text="",
+                payload={"success": False, "message": "请先登录"},
+            ),
+            "chrome146",
+            None,
+        ),
+    )
+    status, _message = nodeseek_sign.sign("session=abc", "false")
+    assert status == "error"
+
+
+def test_sign_429_with_already_body_is_already(monkeypatch):
+    """429 的正文同样优先：限流响应也可能带回"今天已完成签到"。"""
+    monkeypatch.setattr(
+        nodeseek_sign,
+        "_request_with_impersonate_fallback",
+        lambda *a, **k: (
+            FakeResponse(
+                status_code=429,
+                text="",
+                payload={"success": False, "message": "今天已完成签到，请勿重复操作"},
+            ),
+            "chrome146",
+            None,
+        ),
+    )
+    assert nodeseek_sign.sign("session=abc", "false")[0] == "already"
+
+
+def test_sign_non_json_body_is_error(monkeypatch):
+    """正文不是 JSON 时无法判定，按请求异常处理，不误判成成功。"""
+
+    class BrokenResponse:
+        status_code = 200
+        text = "<html>gateway error</html>"
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(
+        nodeseek_sign,
+        "_request_with_impersonate_fallback",
+        lambda *a, **k: (BrokenResponse(), "chrome146", None),
+    )
+    status, message = nodeseek_sign.sign("session=abc", "false")
+    assert status == "error"
+    assert message == "签到请求异常"
+
+
 def test_transport_error_does_not_retry(monkeypatch):
     calls = []
 

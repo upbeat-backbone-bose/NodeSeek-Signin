@@ -50,11 +50,13 @@ class FakeKv {
  * @param {string[]} options.validCookies 视为已登录、可直接签到的 Cookie
  * @param {string} options.attendanceMessage 其他 Cookie 签到时返回的 message
  * @param {boolean} options.attendanceSuccess 其他 Cookie 签到时返回的 success
+ * @param {number} options.attendanceStatus 其他 Cookie 签到时返回的 HTTP 状态码
  */
 function installFetchStub(options = {}) {
   const calls = [];
   const attendanceMessage = options.attendanceMessage ?? '获得 5 个鸡腿';
   const attendanceSuccess = options.attendanceSuccess ?? true;
+  const attendanceStatus = options.attendanceStatus ?? 200;
   // 已通过登录取得的 Cookie，签到时视为成功。
   const loggedInCookies = new Set();
   const validCookies = new Set(options.validCookies ?? []);
@@ -69,10 +71,13 @@ function installFetchStub(options = {}) {
       if (loggedInCookies.has(cookie) || validCookies.has(cookie)) {
         return jsonResponse({ success: true, message: '获得 5 个鸡腿' });
       }
-      return jsonResponse({
-        success: attendanceSuccess,
-        message: attendanceMessage,
-      });
+      return jsonResponse(
+        {
+          success: attendanceSuccess,
+          message: attendanceMessage,
+        },
+        attendanceStatus
+      );
     }
     if (href.includes('/api/account/signIn')) {
       loggedInCookies.add('session=new-cookie');
@@ -318,6 +323,51 @@ test('"已完成签到" 被识别为 already 并单独计数', async () => {
     assert.equal(body.succeeded, 0);
     assert.equal(body.failed, 0);
     assert.equal(body.success, true);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('接口用 500 表达"今天已完成签到"时仍识别为 already', async () => {
+  // 实测（2026-11-01）：同一天重复签到返回 HTTP 500 +
+  // {"success": false, "message": "今天已完成签到，请勿重复操作"}。
+  const stub = installFetchStub({
+    attendanceMessage: '今天已完成签到，请勿重复操作',
+    attendanceSuccess: false,
+    attendanceStatus: 500,
+  });
+  try {
+    const env = makeEnv({ NS_COOKIE: 'c1' });
+    const response = await worker.fetch(checkinRequest(env), env);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.already, 1);
+    assert.equal(body.failed, 0);
+    assert.equal(body.success, true);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('5xx 正文提到未登录时不触发重新登录', async () => {
+  // 5xx 不代表 Cookie 失效，needLogin 会购买验证码。
+  const stub = installFetchStub({
+    attendanceMessage: '请先登录',
+    attendanceSuccess: false,
+    attendanceStatus: 500,
+  });
+  try {
+    const env = makeEnv({ NS_COOKIE: 'c1' });
+    const response = await worker.fetch(checkinRequest(env), env);
+    const body = await response.json();
+
+    assert.equal(body.failed, 1);
+    assert.equal(
+      stub.calls.filter((c) => c.href.includes('/api/account/signIn')).length,
+      0,
+      '服务端故障不应触发登录'
+    );
   } finally {
     stub.restore();
   }

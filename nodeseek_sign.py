@@ -531,25 +531,49 @@ def sign(ns_cookie, ns_random):
             return "error", "请求失败：无响应"
         if response.status_code == 403:
             if _is_cloudflare_challenge(response.text):
-                return "forbidden", f"403 Cloudflare challenge (impersonate={used_impersonate})"
+                return "forbidden", f"403 Cloudflare challenge (最后尝试 impersonate={used_impersonate})"
             return "forbidden", f"403 Forbidden (impersonate={used_impersonate})"
+
+        # 状态码与响应体要一起看，不能只看其中一个。
+        #
+        # 实测（2026-11-01，见 EVIDENCE.md）：同一天重复签到时，接口返回的是
+        # HTTP 500 + {"success": false, "message": "今天已完成签到，请勿重复操作"}。
+        # 也就是说，5xx 并不等于"服务端故障" —— 正文里可能带着"今日已签到"
+        # 这种确定性结论。若在这里直接按状态码判失败，同日重复签到就会被
+        # 误报成服务端错误（上游 main 没有 5xx 分支，反而一直是对的）。
+        data = None
+        body_parsed = True
+        try:
+            data = response.json()
+        except Exception:
+            data = None
+            body_parsed = False
+
+        msg = ""
+        if isinstance(data, dict):
+            raw_msg = data.get("message", "")
+            msg = raw_msg if isinstance(raw_msg, str) else ""
+
+        # 正向信号（拿到奖励 / 今日已签到）与状态码无关：
+        # 接口就是用 500 来表达"今天已完成签到"的。
+        if "鸡腿" in msg:
+            return "success", msg
+        if "已完成签到" in msg:
+            return "already", msg
+
+        # 429 与 5xx 不代表 Cookie 失效，绝不能判成 "invalid"：
+        # 那会为一次服务端故障购买验证码（S-3）。
         if response.status_code == 429:
             return "error", "请求过于频繁 (429)"
         if response.status_code >= 500:
             return "error", f"服务端错误 ({response.status_code})"
 
-        data = response.json()
-        msg = data.get("message", "")
-        # 判定顺序很重要：先看消息里的明确信号，最后才回退到通用的 success 标志。
-        #   - "鸡腿"：本次确实拿到了奖励，属于新签到。
-        #   - "已完成签到"：今日已签，需要单独计数。若接口同时返回 success=true，
-        #     先前的顺序会让 "already" 永远不会被统计。
-        #   - 404 / "请先登录" / "未登录"：会话已失效，必须触发重新登录，
-        #     且要优先于 success 标志，否则失效的 Cookie 永远不会被刷新。
-        if "鸡腿" in msg:
-            return "success", msg
-        if "已完成签到" in msg:
-            return "already", msg
+        # 正文不是可解析的 JSON：无法判定，按请求异常处理。
+        if not body_parsed or not isinstance(data, dict):
+            return "error", "签到请求异常"
+
+        # 其余情况按正文判定：会话失效要优先于通用的 success 标志，
+        # 否则失效的 Cookie 永远不会被刷新。
         if data.get("status") == 404 or "请先登录" in msg or "未登录" in msg:
             return "invalid", msg
         if data.get("success"):

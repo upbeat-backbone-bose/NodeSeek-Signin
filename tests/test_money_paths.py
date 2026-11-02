@@ -136,6 +136,85 @@ class TestRunDoesNotBuyCaptcha:
         assert "跳过重新登录" in out
         assert exit_code == 1
 
+    def test_s18_5xx_login_prompt_body_does_not_buy_captcha(self, monkeypatch, capsys):
+        """S-18 5xx 正文提到未登录时也不得购买验证码。
+
+        接口用 500 表达"今天已完成签到"，说明 5xx 的正文可能带业务信号。
+        但 5xx 终究不代表 Cookie 失效，正文里的"请先登录"不可信。
+        """
+        monkeypatch.setenv("NS_COOKIE", "c1")
+        monkeypatch.setenv("USER", "u1")
+        monkeypatch.setenv("PASS", "p1")
+        monkeypatch.setenv("CLIENT_KEY", "key")
+        login_calls = []
+        monkeypatch.setattr(
+            nodeseek_sign,
+            "session_login",
+            lambda *a, **k: login_calls.append(a) or "fresh",
+        )
+
+        class FakeResponse:
+            status_code = 500
+            text = ""
+
+            def json(self):
+                return {"success": False, "message": "请先登录"}
+
+        monkeypatch.setattr(
+            nodeseek_sign,
+            "_request_with_impersonate_fallback",
+            lambda *a, **k: (FakeResponse(), "chrome146", None),
+        )
+
+        exit_code = nodeseek_sign.run()
+        out = capsys.readouterr().out
+
+        assert login_calls == []
+        assert "跳过重新登录" in out
+        assert exit_code == 1
+
+    def test_s18_5xx_already_body_succeeds_without_login(self, monkeypatch, capsys):
+        """S-18 5xx + "今天已完成签到"应判为 already，整体成功且不登录。
+
+        这是 2026-11-01 分支连续失败的根因：接口用 500 表达"今天已完成签到"，
+        而分支先按状态码判失败，导致同日重复签到被误报成服务端错误。
+        """
+        monkeypatch.setenv("NS_COOKIE", "c1")
+        monkeypatch.setenv("USER", "u1")
+        monkeypatch.setenv("PASS", "p1")
+        monkeypatch.setenv("CLIENT_KEY", "key")
+        login_calls = []
+        monkeypatch.setattr(
+            nodeseek_sign,
+            "session_login",
+            lambda *a, **k: login_calls.append(a) or "fresh",
+        )
+        monkeypatch.setattr(
+            nodeseek_sign, "get_signin_stats", lambda *a, **k: (None, "ok")
+        )
+
+        class FakeResponse:
+            status_code = 500
+            text = ""
+
+            def json(self):
+                return {"success": False, "message": "今天已完成签到，请勿重复操作"}
+
+        monkeypatch.setattr(
+            nodeseek_sign,
+            "_request_with_impersonate_fallback",
+            lambda *a, **k: (FakeResponse(), "chrome146", None),
+        )
+
+        exit_code = nodeseek_sign.run()
+        out = capsys.readouterr().out
+
+        assert login_calls == []
+        assert "签到成功" in out
+        assert exit_code == 0
+        assert '"already": 1' in out
+        assert '"failed": 0' in out
+
 
 class FakeSolver:
     """记录求解参数并返回预置结果或抛出预置异常。"""
