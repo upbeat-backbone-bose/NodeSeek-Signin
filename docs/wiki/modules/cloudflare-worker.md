@@ -23,7 +23,7 @@ Cloudflare Worker 版本的独立签到实现，提供 HTTP 触发和定时触�
 1. 从 Worker 环境读取账号、密码、Cookie、验证码配置。
 2. 逐槽位合并 Cookie：优先取 KV 中该下标已刷新的值，KV 缺失时回退到 `NS_COOKIE`。
    面板里的 `NS_COOKIE` 是静态的，若整体优先于 KV，刷新结果将永远无法被复用。
-3. 仅在 Cookie 明确失效时通过 2captcha 求解 Turnstile 并登录。
+3. 仅在账号没有可用 Cookie、或 Cookie 明确失效（404 / 未登录 / 请先登录）时通过 2captcha 求解 Turnstile 并登录；网络错误和 Cloudflare 403 不会触发付费求解。
 4. 对每个账号汇总结果，仅返回聚合字段。
 5. 可选发送 Telegram 官方 API 通知；配置错误时同样发送通知，不静默失败。
 

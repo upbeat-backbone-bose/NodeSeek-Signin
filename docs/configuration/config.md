@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | `SOLVER_TYPE` | 可选 | `turnstile` | `turnstile` 表示自建 CloudFreed / Cloudflyer 等接口；`yescaptcha` 表示托管服务 |
 | `API_BASE_URL` | 条件必填 | 空字符串 | 指向自建服务或 YesCaptcha 的 API 地址，如 `http://127.0.0.1:3000` 或 `https://api.yescaptcha.com` |
-| `CLIENT_KEY` | 必填 | - | 验证码服务密钥，CloudFreed 与 YesCaptcha 都使用该名称 |
+| `CLIENT_KEY` | 条件必填 | - | 验证码服务密钥，CloudFreed 与 YesCaptcha 都使用该名称。仅在需要重新登录（Cookie 缺失或明确失效）时才要求配置；未配置时会跳过验证码求解与登录 |
 
 > ℹ️ 更多供应商注意事项见 `docs/configuration/solutions.md`。
 

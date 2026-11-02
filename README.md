@@ -73,7 +73,7 @@ mkdocs serve
 | 变量名 | 必需 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `NS_COOKIE` | 建议 | - | NodeSeek 论坛的用户 Cookie，多账号使用 `&` 或换行符分隔 |
-| `USER`、`PASS` | 可选 | - | **第 1 个账号**的用户名和密码，Cookie 失效时自动登录 |
+| `USER`、`PASS` | 可选 | - | **第 1 个账号**的用户名和密码，Cookie 缺失或明确失效时自动登录 |
 | `USER1`、`USER2`... | 可选 | - | 第 2、第 3... 个账号的用户名（必须连续设置） |
 | `PASS1`、`PASS2`... | 可选 | - | 对应账号的密码 |
 
@@ -88,7 +88,7 @@ mkdocs serve
 | `TIMEOUT` | 可选 | 15 | 单次网络请求超时时间（秒） |
 | `NS_IMPERSONATE` | 可选 | chrome146 | 首选浏览器指纹版本 |
 | `NS_IMPERSONATE_ATTEMPTS` | 可选 | 3 | 指纹尝试次数（1-5），仅在 Cloudflare 挑战时切换 |
-| `MAX_LOGIN_ATTEMPTS` | 可选 | 账号数 | 每次运行最多重新登录次数，避免持续消耗验证码 |
+| `MAX_LOGIN_ATTEMPTS` | 可选 | 账号数与 Cookie 数中的较大者 | 每次运行最多重新登录次数，避免持续消耗验证码 |
 | `STATS_MAX_PAGES` | 可选 | 20 | 签到统计最多查询页数（1-20）；窗口被截断时结果会标注"数据不完整" |
 | `DEBUG` | 可选 | false | 开启后输出详细调试信息，**可能包含敏感上下文，默认关闭** |
 
@@ -125,7 +125,7 @@ mkdocs serve
 | `NOTIFY_THREAD_TIMEOUT` | 可选 | 30 | 单个通知渠道最长等待时间（秒） |
 | `SKIP_PUSH_TITLE` | 可选 | - | 跳过标题完全匹配的通知，多个标题用换行分隔 |
 
-支持的推送渠道：Bark、钉钉机器人、飞书机器人、go-cqhttp、gotify、iGot、serverJ、PushDeer、PushPlus、微加机器人、Qmsg、企业微信机器人、企业微信应用、Telegram、智能微秘书、SMTP 邮件、PushMe、CHRONOCAT、自定义 WebHook。详见 [`notify.py`](notify.py)。
+支持的推送渠道：Bark、钉钉机器人、飞书机器人、go-cqhttp、gotify、iGot、serverJ、PushDeer、Synology Chat、PushPlus、微加机器人、Qmsg、企业微信机器人、企业微信应用、Telegram、智能微秘书、SMTP 邮件、PushMe、CHRONOCAT、自定义 WebHook。详见 [`notify.py`](notify.py)。
 
 > 完整变量说明请参阅 [配置文档](docs/configuration/config.md)。
 

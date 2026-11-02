@@ -70,7 +70,7 @@ mkdocs build --strict
 - 修改通知相关逻辑时，同步检查 `nodeseek_sign.py` 与 `notify.py` 的超时和开关读取。
 - 修改调度行为时，确认 `docker-compose.yml` 和 `.github/workflows/blank.yml` 的运行入口是否仍一致。
 - 修改验证码参数命名时，不要更改 `CLIENT_KEY` 变量名。
-- 修改 Worker 时同步更新 `docs/deployment/cloudflare-worker.md`，两份实现互不影响。
+- 修改 Worker 时同步更新 `docs/deployment/cloudflare-worker.md`（部署与变量说明）和 `docs/wiki/modules/cloudflare-worker.md`（实现说明），两份实现互不影响。
 
 ## 5. 回归验证清单
 

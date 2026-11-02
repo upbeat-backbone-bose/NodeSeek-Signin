@@ -14,7 +14,7 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - Docker: `docker compose up -d`; the container runs as UID/GID 1000 with `IN_DOCKER=true`.
 - Docs: `mkdocs serve`; CI runs `mkdocs build --strict`.
 - Quality gates (dev-only, pinned in `requirements-dev.txt`): `ruff check .` (lint),
-  `ruff format --check .` (format), `python scripts/mypy_baseline.py` (types — only
+  `python scripts/mypy_baseline.py` (types — only
   fails on errors **new** relative to `scripts/mypy-baseline.txt`; run it with
   `--update` to shrink the baseline after fixing historic ones),
   `pip-audit -r requirements.txt` (supply chain). Rule sets are pinned in `ruff.toml`
@@ -29,7 +29,7 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - `scheduler.py` runs the child via an absolute script path and the repo directory as cwd. It enforces `TASK_TIMEOUT`, forwards stop signals, writes `cookie/heartbeat` (including while the child runs), and uses a POSIX `flock` lock when available.
 - `notify.py` is optional (`from notify import send` may fail without breaking check-in). Its `push_config` snapshots environment variables once at import; `NOTIFY_CONFIG_JSON` can override fields. A new channel needs entries in `push_config` and `add_notify_function`. Channel threads are daemonized and joined with `NOTIFY_THREAD_TIMEOUT`.
 - `nodeseek-cloudflare-worker.js` is a separate implementation with different variable names (`user`, `pass`, `CAPTCHA_API_KEY`, `TRIGGER_TOKEN`, `CHECKIN_KV`, `BotToken`, `ChatID`) and a 2captcha backend. Changes to the Python flow do not propagate there.
-- `CLOUDFLARE_WORKER_README.md` is only a pointer; maintain `docs/deployment/cloudflare-worker.md`.
+- `CLOUDFLARE_WORKER_README.md` is only a pointer; maintain `docs/deployment/cloudflare-worker.md` (deployment and variables) and `docs/wiki/modules/cloudflare-worker.md` (implementation notes).
 
 ## Verified config gotchas
 
@@ -41,6 +41,7 @@ NodeSeek auto sign-in: a small Python app plus a standalone Cloudflare Worker. U
 - `TIMEOUT`, `DEBUG`, `NS_IMPERSONATE_ATTEMPTS`, and `MAX_LOGIN_ATTEMPTS` are read through `config.py` (apart from Worker env vars). `NS_IMPERSONATE_ATTEMPTS` is capped at 5 and unsupported fingerprints are filtered against the installed curl_cffi; transport errors never retry a non-idempotent check-in POST.
 - `STATS_MAX_PAGES` defaults to 20 (max 20) and caps the credit-page pagination; the stats query also has an overall deadline. Lowering it truncates the window, and the result is then labelled "数据不完整".
 - Only a missing cookie or a clearly invalid cookie (`404` / 未登录 / 请先登录) triggers a paid captcha login. Network errors, 403 and 5xx do not. When the account count exceeds the cookie count, the extra accounts have no trustworthy slot identity: they are counted as failures and never enter the login path.
+- The attendance API signals "already checked in today" with **HTTP 500** and body `{"success": false, "message": "今天已完成签到，请勿重复操作"}` (measured 2026-11-01; same on every `impersonate` fingerprint). So `sign()` must inspect the body *before* the status code: positive signals (`鸡腿` → `success`, `已完成签到` → `already`) win at any status, while 429/5xx never map to `invalid`. Upstream `main` has no 5xx branch and was therefore always right.
 - Qinglong writeback resolves `QLAPI` from globals at call time; it works only when Qinglong's task preloader injects it, and skips cleanly otherwise.
 - GitHub cookie writeback is encrypted and **off by default**. Set `GH_COOKIE_WRITEBACK=true`; it requires `GH_PAT` (Secrets write), `GITHUB_REPOSITORY`, and PyNaCl.
 - Worker `/checkin` requires `TRIGGER_TOKEN`; without it HTTP trigger returns 503. KV is optional but recommended for cookie persistence and locking.
