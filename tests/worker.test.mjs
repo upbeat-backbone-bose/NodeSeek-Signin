@@ -43,6 +43,15 @@ class FakeKv {
   }
 }
 
+/** 精确匹配 Telegram API 主机名，避免用子串判断 URL。 */
+function isTelegramCall(call) {
+  try {
+    return new URL(call.href).hostname === 'api.telegram.org';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 安装 fetch 桩。
  *
@@ -249,19 +258,13 @@ test('重新登录后新 Cookie 会按槽位写回 KV', async () => {
 
 test('配置错误时发送 Telegram 通知，而不是静默失败', async () => {
   const stub = installFetchStub();
-    const telegram = stub.calls.find((c) => {
-      try {
-        return new URL(c.href).hostname === 'api.telegram.org';
-      } catch {
-        return false;
-      }
-    });
+  try {
     // 缺少 user / pass
     const env = makeEnv({ user: '', pass: '', BotToken: 'bot', ChatID: '42' });
     const response = await worker.fetch(checkinRequest(env), env);
 
     assert.equal(response.status, 500);
-    const telegram = stub.calls.find((c) => c.href.includes('api.telegram.org'));
+    const telegram = stub.calls.find(isTelegramCall);
     assert.ok(telegram, '配置错误时必须发送 Telegram 通知');
     const body = JSON.parse(telegram.init.body);
     assert.ok(body.text.includes('未配置'), '通知内容应说明失败原因');
@@ -302,19 +305,13 @@ test('缺少 CAPTCHA_API_KEY 且账号无 Cookie 时计为失败并发送 Telegr
       BotToken: 'bot',
       ChatID: '42',
     });
-      stub.calls.some((c) => {
-        try {
-          return new URL(c.href).hostname === 'api.telegram.org';
-        } catch {
-          return false;
-        }
-      }),
+    const response = await worker.fetch(checkinRequest(env), env);
     const body = await response.json();
 
     assert.equal(response.status, 500);
     assert.equal(body.failed, 1);
     assert.ok(
-      stub.calls.some((c) => c.href.includes('api.telegram.org')),
+      stub.calls.some(isTelegramCall),
       '必须发送 Telegram 通知'
     );
     assert.ok(
