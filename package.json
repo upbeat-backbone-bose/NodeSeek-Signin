@@ -1,0 +1,9 @@
+{
+  "name": "nodeseek-signin-worker",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker 实现的测试支撑配置（无运行时依赖）",
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\""
+  }
+}

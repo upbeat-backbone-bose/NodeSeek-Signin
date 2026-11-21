@@ -40,12 +40,15 @@
 
 ## 镜像标签策略
 
-发布 Release 时，会自动生成以下标签的镜像：
+构建会生成以下标签的镜像：
 
 | 标签 | 说明 | 示例 |
 |------|------|------|
 | `v{version}` | git tag 版本 | `nodeseek-signin:v0.0.1` |
-| `latest` | 最新版本 | `nodeseek-signin:latest` |
+| `latest` | 最新 Release | `nodeseek-signin:latest` |
+| `test` | 手动触发默认标签或 `docker-test/**` 分支构建 | `nodeseek-signin:test` |
+
+手动触发（workflow_dispatch）时可通过 `docker_tags` 输入额外指定标签，多个标签用逗号分隔，例如 `v1.0.0,edge` 会同时生成这两个标签。
 
 ## 本地构建
 
@@ -55,29 +58,45 @@
 # 构建镜像
 docker build -t nodeseek-signin .
 
-# 运行容器
+# 运行容器（Cookie 目录需归属 UID 1000）
+mkdir -p cookie
+sudo chown -R 1000:1000 cookie
 docker run -d \
-  -e NS_COOKIE="your_cookie_here" \
-  -e DEBUG="true" \
+  --name nodeseek-signin \
+  --user 1000:1000 \
+  --env-file .env \
+  -e IN_DOCKER=true \
+  -v "$PWD/cookie:/app/cookie" \
   nodeseek-signin
 ```
 
 ## Dockerfile 参考
 
 ```dockerfile
-FROM python:3.14-alpine
+FROM python:3.14.10-alpine3.24
 
 RUN apk add --no-cache tzdata ca-certificates
-ENV TZ=Asia/Shanghai
+ENV TZ=Asia/Shanghai \
+    PYTHONUNBUFFERED=1 \
+    IN_DOCKER=true
 
 RUN pip install --no-cache-dir --upgrade pip
-
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY *.py ./
+
+RUN addgroup -g 1000 app \
+    && adduser -D -u 1000 -G app app \
+    && mkdir -p /app/cookie \
+    && chown -R app:app /app
+USER app
+
+HEALTHCHECK --interval=5m --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import os,sys,time; p=os.getenv('HEARTBEAT_FILE','./cookie/heartbeat'); sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 600 else 1)"
 
 CMD ["python", "scheduler.py"]
 ```
+
+> 镜像中的 Python 补丁版本会随依赖升级调整；请以仓库根目录的实际 `Dockerfile` 为准。

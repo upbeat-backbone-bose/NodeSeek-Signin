@@ -16,7 +16,6 @@ docker run -p 3000:3000 ghcr.io/cuberetry/cloudfreed:latest
 
 # 方式二：使用 Docker Compose
 # 创建 docker-compose.yml
-version: '3'
 services:
   cloudfreed:
     image: ghcr.io/cuberetry/cloudfreed:latest
@@ -33,8 +32,8 @@ services:
 | :------: | :--- |
 | `SOLVER_TYPE` | 设置为 `turnstile` |
 | `API_BASE_URL` | CloudFreed 服务地址，如 `http://127.0.0.1:3000` |
-| `CLIENT_KEY` | CloudFreed 服务密钥（如果有的话） |
-| `USER1`/`PASS1`... | NodeSeek 论坛用户名/密码 |
+| `CLIENT_KEY` | 验证码服务密钥。Python 流程中为必填：未配置时脚本会跳过验证码求解与登录 |
+| `USER`/`PASS` 或 `USER1`/`PASS1`... | NodeSeek 论坛用户名/密码 |
 
 ### 示例配置
 
@@ -43,8 +42,10 @@ services:
 SOLVER_TYPE=turnstile
 API_BASE_URL=http://127.0.0.1:3000
 CLIENT_KEY=your_client_key_here
-USER1=your_username
-PASS1=your_password
+USER=your_username
+PASS=your_password
+# USER1=your_username1
+# PASS1=your_password1
 ```
 
 > **注意**：自建 CloudFreed 需要能够访问 Cloudflare，建议部署在海外服务器。
@@ -64,9 +65,8 @@ YesCaptcha 是托管式验证码解决服务，无需自行部署。
 
 | 变量名称 | 说明 |
 | :------: | :--- |
-| `CLIENT_KEY` | YesCaptcha 的 API 密钥 |
-| `USER1`/`USER2`... | NodeSeek 论坛用户名 |
-| `PASS1`/`PASS2`... | NodeSeek 论坛密码 |
+| `CLIENT_KEY` | YesCaptcha 的 API 密钥。Python 流程中为必填：未配置时脚本会跳过验证码求解与登录 |
+| `USER`/`PASS` 或 `USER1`/`PASS1`... | NodeSeek 论坛用户名/密码 |
 | `SOLVER_TYPE` | 设置为 `yescaptcha` |
 
 > **提示**：YesCaptcha 提供两个服务节点，可根据网络情况选择：
@@ -98,11 +98,13 @@ YesCaptcha 是托管式验证码解决服务，无需自行部署。
 
 ### 2. 达到最大重试次数
 
-- TurnstileSolver 默认重试 20 次
-- 间隔 6 秒等待
+- TurnstileSolver 默认最多轮询 20 次，间隔 6 秒，并受总时限约束
+- 遇到 `failed` / `error` / `invalid` 等终态会立即停止，不会继续消耗时间
 - 可通过传入 `max_retries` 参数调整
 
 ### 3. Cookie 有效期
 
-- 如果配置了 `GH_PAT`，Cookie 会自动更新回写
+- 只有 Cookie 缺失或明确失效（404 / 未登录 / 请先登录）时才会重新登录并消耗验证码
+- GitHub Actions 默认不会自动回写；需要设置 `GH_COOKIE_WRITEBACK=true` 并提供 `GH_PAT`
+- Docker 模式在重新登录刷新出 Cookie 后，会原子写入 `cookie/NS_COOKIE.txt`
 - 建议定期检查 Cookie 有效性

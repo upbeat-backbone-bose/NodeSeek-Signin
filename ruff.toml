@@ -1,0 +1,17 @@
+# Ruff 配置
+#
+# 规则集显式固定，避免"随 ruff 版本漂移"导致 CI 与本地结果不一致。
+# E4/E7/E9/F 是 ruff 的默认核心集（pycodestyle 错误 + pyflakes），
+# 覆盖未使用导入、裸 except、f-string 无占位符等真实缺陷。
+# 风格类规则（UP/I/SIM 等）暂不启用：本仓库以 Python 3.11 为基线，
+# 强制 PEP 604 注解会引入与功能无关的改动。
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+# 本仓库脚本普遍以 "文件名:行号: " 前缀输出，直接给用户看，
+# 不强制 W505 之类的行宽规则。
+[lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[format]
+quote-style = "double"
