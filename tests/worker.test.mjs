@@ -64,6 +64,12 @@ function installFetchStub(options = {}) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     const href = typeof url === 'string' ? url : url.toString();
+    let hostname = '';
+    try {
+      hostname = new URL(href).hostname;
+    } catch {
+      hostname = '';
+    }
     calls.push({ href, init });
 
     if (href.includes('/api/attendance')) {
@@ -83,7 +89,7 @@ function installFetchStub(options = {}) {
       loggedInCookies.add('session=new-cookie');
       return jsonResponse({ success: true, message: '登录成功' });
     }
-    if (href.includes('api.telegram.org')) {
+    if (hostname === 'api.telegram.org') {
       return jsonResponse({ ok: true });
     }
     if (href.includes('createTask')) {
