@@ -302,7 +302,13 @@ test('缺少 CAPTCHA_API_KEY 且账号无 Cookie 时计为失败并发送 Telegr
       BotToken: 'bot',
       ChatID: '42',
     });
-    const response = await worker.fetch(checkinRequest(env), env);
+      stub.calls.some((c) => {
+        try {
+          return new URL(c.href).hostname === 'api.telegram.org';
+        } catch {
+          return false;
+        }
+      }),
     const body = await response.json();
 
     assert.equal(response.status, 500);
