@@ -199,23 +199,14 @@ class TestSingleInstanceLock:
 
     def test_s9_second_instance_cannot_acquire_the_lock(self, monkeypatch, tmp_path):
         """同一个锁文件被持有时，第二次获取必须失败（仅 POSIX）。"""
-        fcntl = pytest.importorskip("fcntl", reason="flock 单实例锁只在 POSIX 平台生效")
+        pytest.importorskip("fcntl", reason="flock 单实例锁只在 POSIX 平台生效")
         lock_file = tmp_path / "scheduler.lock"
         monkeypatch.setenv("SCHEDULER_LOCK_FILE", str(lock_file))
 
+        # 第一次调用把句柄保存在 scheduler._lock_handle 中，锁保持持有；
+        # 第二次调用开新 fd 抢同一把锁，POSIX 下必然失败。
         assert scheduler._acquire_lock() is True
-
-        # 第二个实例：模拟 POSIX 上 flock 被占用。
-        with open(lock_file, "a+", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            try:
-                # 第二个实例尝试获取同一把锁。
-                monkeypatch.setattr(scheduler, "_lock_handle", None, raising=False)
-                result = scheduler._acquire_lock()
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-        assert result is False
+        assert scheduler._acquire_lock() is False
 
     @pytest.mark.skipif(sys.platform == "win32", reason="非 POSIX 平台上锁是空操作")
     def test_s9_lock_is_released_after_close(self, monkeypatch, tmp_path):
