@@ -9,5 +9,5 @@ diff-cover==9.7.0
 hypothesis==6.151.1
 pytest-randomly==5.1.0
 ruff==0.17.3
-mypy==1.18.2
+mypy==2.4.1
 pip-audit==2.9.0
