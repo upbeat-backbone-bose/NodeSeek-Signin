@@ -249,7 +249,13 @@ test('重新登录后新 Cookie 会按槽位写回 KV', async () => {
 
 test('配置错误时发送 Telegram 通知，而不是静默失败', async () => {
   const stub = installFetchStub();
-  try {
+    const telegram = stub.calls.find((c) => {
+      try {
+        return new URL(c.href).hostname === 'api.telegram.org';
+      } catch {
+        return false;
+      }
+    });
     // 缺少 user / pass
     const env = makeEnv({ user: '', pass: '', BotToken: 'bot', ChatID: '42' });
     const response = await worker.fetch(checkinRequest(env), env);
