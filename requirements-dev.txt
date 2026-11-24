@@ -1,13 +1,13 @@
 python-dotenv==1.2.4
 mkdocs==1.6.1
-mkdocs-material==9.8.1
+mkdocs-material==9.8.2
 pytest==9.2.0
 
 # Gauntlet 工具链（仅开发期使用，不进 requirements.txt）
 pytest-cov==7.1.0
-diff-cover==11.0.3
-hypothesis==6.170.15
+diff-cover==11.0.4
+hypothesis==6.170.16
 pytest-randomly==5.1.0
-ruff==0.17.5
+ruff==0.17.6
 mypy==2.4.1
 pip-audit==2.10.1
